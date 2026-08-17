@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>书虫蛊 - AI文献阅读器</title>
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="css/style.css?v=146">
+<script src="lib/pdf.min.js?v=146"></script>
+<script src="lib/marked.min.js?v=146"></script>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="logo" title="书虫蛊 书籍阅读 从教材中提炼知识火花">📚 书虫蛊<span class="logo-sub">深度书籍阅读器</span></div>
+    <nav class="view-tabs">
+      <button id="btnViewShelf" class="tab-btn" title="书架">📚 书架</button>
+      <button id="btnViewRead" class="tab-btn" title="阅读 PDF">📖 阅读</button>
+      <button id="btnViewNote" class="tab-btn" title="笔记（整合分栏：PDF右侧笔记空间）">📝 笔记</button>
+      <button id="btnViewAttach" class="tab-btn" title="附件管理（文件树/拖拽移动/预览/导出）">📎 附件</button>
+    </nav>
+    <div class="topbar-right">
+      <button id="btnHelp" class="btn-icon" title="使用教程" aria-label="使用教程">❓</button>
+      <button id="btnSkill" class="btn-icon" title="学习偏好" aria-label="学习偏好">🎯</button>
+      <button id="btnSettings" class="btn-icon" title="AI 配置" aria-label="AI 配置">⚙</button>
+    </div>
+  </header>
+  <main id="main">
+    <!-- 书架视图：文件管理与图书浏览 -->
+    <section id="shelfView" class="shelf-view">
+      <div class="shelf-hero">
+        <h1 class="shelf-title">书虫蛊</h1>
+        <p class="shelf-tagline">精读每一页文献，拥抱知识的力量</p>
+        <div class="shelf-tools">
+          <input id="shelfSearch" type="text" class="shelf-search" placeholder="🔍 搜索书名、作者、标签...">
+          <button id="btnImportBook" class="shelf-import-btn">📥 导入书籍</button>
+          <input type="file" id="inputBookFile" accept="application/pdf" multiple style="display:none">
+        </div>
+      </div>
+      <div id="shelfCategories" class="shelf-categories"></div>
+      <div id="shelfGrid" class="shelf-grid-wrap"></div>
+      <div class="shelf-drop-hint" id="shelfDropHint">拖拽 PDF 文件到此处导入</div>
+    </section>
+    <section id="pdfReader" class="panel">
+      <div id="pdfToolbar" class="pdf-toolbar">
+        <div class="tb-group">
+          <button id="btnBackShelf" class="pdf-btn" title="返回书架">← 书架</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="btnToggleTOC" class="pdf-btn" title="目录">📑 目录</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <span id="pdfPageInfo" class="pdf-page-info">未加载</span>
+          <button id="btnPrevPage" class="pdf-btn" title="上一页">◀</button>
+          <button id="btnNextPage" class="pdf-btn" title="下一页">▶</button>
+          <input id="inputJumpPage" type="number" min="1" class="pdf-jump" placeholder="页码">
+          <button id="btnJumpPage" class="pdf-btn">跳转</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group tb-group-end">
+          <select id="selectZoom" class="pdf-zoom">
+            <option value="auto">适合宽度</option>
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1" selected>100%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+          </select>
+          <span id="labelCurrentZoom" class="pdf-zoom-label" title="当前缩放比例（Ctrl+滚轮无级缩放）">100%</span>
+        </div>
+        <!-- P2-14：标注工具直接融入顶部「目录/划重点」一体化导航栏，不再单独占一整行视野 -->
+        <span class="tb-sep"></span>
+        <div class="tb-group pdf-annot-bar" title="标注编辑（快捷键：Esc 取消选择，Delete 删除所选）">
+          <span class="hl-tb-label-inline">标注</span>
+          <button class="pdf-btn" data-tool="select"    onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTool)PA.setTool(PA.getTool&&PA.getTool()==='select'?null:'select')" title="统一编辑模式：移动/编辑/删除已有标注" style="background:#e8f0fe;color:#1a73e8;border-color:#1a73e8;">✎</button>
+          <button class="pdf-btn" data-tool="highlight" onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTool)PA.setTool(PA.getTool&&PA.getTool()==='highlight'?null:'highlight')" title="高亮标记（半透明背景色）">🖍</button>
+          <button class="pdf-btn" data-tool="underline" onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTool)PA.setTool(PA.getTool&&PA.getTool()==='underline'?null:'underline')" title="下划线">﹏</button>
+          <button class="pdf-btn" data-tool="rect"      onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTool)PA.setTool(PA.getTool&&PA.getTool()==='rect'?null:'rect')" title="矩形框">⬜</button>
+          <button class="pdf-btn" data-tool="pen"       onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTool)PA.setTool(PA.getTool&&PA.getTool()==='pen'?null:'pen')" title="钢笔手绘">🖊</button>
+          <button class="pdf-btn" data-tool="card"      onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTool)PA.setTool(PA.getTool&&PA.getTool()==='card'?null:'card')" title="添加解释卡片">📝</button>
+          <button class="pdf-btn" id="btnHlSelect" title="文本选择模式：自由划选 PDF 文本（划选后出现「推送到笔记」）" onclick="var PA=window.PDFAnnotate;if(PA&&PA.setTextSelectMode){var on=!PA.getTextSelectMode();PA.setTextSelectMode(on);this.classList.toggle('active',on);}else if(PA&&PA.setTool){PA.setTool(null);}">📋</button>
+          <button class="pdf-btn" id="btnHlDelete" title="删除选中元素" onclick="if(window.PDFAnnotate && PDFAnnotate.deleteSelected) PDFAnnotate.deleteSelected()">🗑</button>
+        </div>
+        <input type="file" id="inputPdfFile" accept="application/pdf" style="display:none">
+      </div>
+      <!-- 标注编辑工具栏（保留 DOM 给旧脚本引用；但通过 CSS 折叠成 0 高度，避免再占一整行视野） -->
+      <div id="hlToolbar" class="hl-toolbar" style="display:none;visibility:hidden;height:0;padding:0;margin:0;border:none;">
+        <div class="tb-group">
+          <span class="hl-tb-label">标注编辑区</span>
+          <button class="pdf-btn" data-tool="select" title="统一编辑模式：可移动/编辑/删除已有标注" style="background:#e8f0fe;color:#1a73e8;border-color:#1a73e8;">✎ 统一编辑</button>
+          <button class="pdf-btn" data-tool="highlight" title="高亮标记（半透明背景色）">🖍 高亮</button>
+          <button class="pdf-btn" data-tool="underline" title="下划线">﹏ 下划线</button>
+          <button class="pdf-btn" data-tool="rect" title="矩形框">⬜ 框</button>
+          <button class="pdf-btn" data-tool="pen" title="钢笔（手绘）">🖊 钢笔</button>
+          <button class="pdf-btn" data-tool="card" title="添加解释卡片">📝 卡片</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button class="pdf-btn" id="btnHlSelect" title="选择/取消（点击或框选，支持多选）" onclick="PDFAnnotate.setTool && PDFAnnotate.setTool(null)">✅ 选择</button>
+          <button class="pdf-btn" id="btnHlDelete" title="删除选中元素" onclick="PDFAnnotate.deleteSelected && PDFAnnotate.deleteSelected()">🗑 删除</button>
+        </div>
+        <span class="hl-tb-hint">提示：选中后可拖拽移动，双击卡片编辑，Ctrl+点击多选</span>
+      </div>
+        <!-- 下划线配置面板 -->
+        <div id="hlUnderlinePanel" class="hl-config-panel" style="display:none;">
+          <div class="hl-up-header hl-drag-handle">
+            <strong>⠿ 下划线配置</strong>
+            <button id="hlUnderlinePanelClose" class="hl-up-close" title="折叠面板">&minus;</button>
+          </div>
+          <div class="hl-up-body">
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">颜色</label>
+              <div style="display:flex;gap:4px;align-items:center;">
+                <input type="color" id="hlUnderlineColor" value="#FFD700" style="flex:1;height:28px;border:none;cursor:pointer;">
+                <button id="hlUnderlineEyeDropper" style="width:28px;height:28px;border:1px solid #ddd;border-radius:4px;background:#f9f9f9;cursor:pointer;font-size:14px;line-height:1;padding:0;" title="页面取色">&#x1F3A8;</button>
+              </div>
+              <div id="hlUnderlineColorHistory" style="display:flex;gap:3px;margin-top:5px;flex-wrap:wrap;"></div>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">线型</label>
+              <select id="hlUnderlineStyle" style="width:100%;padding:4px;font-size:12px;">
+                <option value="solid">直线</option>
+                <option value="dashed">虚线</option>
+                <option value="wavy">波浪线</option>
+                <option value="double">双直线</option>
+              </select>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">粗细</label>
+              <input type="range" id="hlUnderlineWidth" min="1" max="8" value="3" style="width:100%;">
+              <span id="hlUnderlineWidthVal" style="font-size:11px;color:#888;">3px</span>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" id="hlUnderlineApplyAll"> 应用于整页标注
+              </label>
+            </div>
+            <div class="hl-up-actions" style="display:flex;gap:6px;">
+              <button id="hlUnderlineApply" style="flex:1;padding:5px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">应用</button>
+              <button id="hlUnderlineReset" style="flex:1;padding:5px;background:#f1f1f1;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">重置</button>
+              <button class="hlApplySelected" style="flex:1;padding:5px;background:#f9f9f9;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">应用于选中</button>
+            </div>
+          </div>
+        </div>
+        <!-- 高亮配置面板 -->
+        <div id="hlHighlightPanel" class="hl-config-panel" style="display:none;">
+          <div class="hl-up-header hl-drag-handle">
+            <strong>⠿ 高亮配置</strong>
+            <button class="hl-up-close" title="折叠面板">&minus;</button>
+          </div>
+          <div class="hl-up-body">
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">颜色</label>
+              <input type="color" class="hl-up-color" value="#ff6b6b" style="width:100%;height:28px;border:none;cursor:pointer;">
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">透明度</label>
+              <input type="range" class="hl-up-opacity" min="10" max="100" value="40" style="width:100%;">
+              <span class="hl-up-opacity-val" style="font-size:11px;color:#888;">40%</span>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" class="hl-up-applyall"> 应用于整页标注
+              </label>
+            </div>
+            <div class="hl-up-actions" style="display:flex;gap:6px;">
+              <button class="hl-up-apply" style="flex:1;padding:5px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">应用</button>
+              <button class="hl-up-reset" style="flex:1;padding:5px;background:#f1f1f1;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">重置</button>
+              <button class="hlApplySelected" style="flex:1;padding:5px;background:#f9f9f9;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">应用于选中</button>
+            </div>
+          </div>
+        </div>
+        <!-- 矩形框配置面板 -->
+        <div id="hlRectPanel" class="hl-config-panel" style="display:none;">
+          <div class="hl-up-header hl-drag-handle">
+            <strong>⠿ 矩形框配置</strong>
+            <button class="hl-up-close" title="折叠面板">&minus;</button>
+          </div>
+          <div class="hl-up-body">
+            <div class="hl-up-row" style="margin-bottom:6px;">
+              <label style="font-size:11px;display:block;margin-bottom:2px;color:#666;">填充颜色</label>
+              <input type="color" class="hlRectFillColor" value="#ff6b6b" style="width:100%;height:28px;border:none;cursor:pointer;">
+            </div>
+            <div class="hl-up-row" style="margin-bottom:10px;">
+              <label style="font-size:11px;display:block;margin-bottom:2px;color:#666;">填充透明度</label>
+              <input type="range" class="hlRectFillOpacity" min="0" max="100" value="30" style="width:100%;">
+              <span class="hlRectFillOpacityVal" style="font-size:11px;color:#888;">30%</span>
+            </div>
+            <div style="border-top:1px solid #eee;margin:8px 0;"></div>
+            <div class="hl-up-row" style="margin-bottom:6px;">
+              <label style="font-size:11px;display:block;margin-bottom:2px;color:#666;">边框颜色</label>
+              <input type="color" class="hlRectStrokeColor" value="#e74c3c" style="width:100%;height:28px;border:none;cursor:pointer;">
+            </div>
+            <div class="hl-up-row" style="margin-bottom:6px;">
+              <label style="font-size:11px;display:block;margin-bottom:2px;color:#666;">边框粗细</label>
+              <input type="range" class="hlRectStrokeWidth" min="1" max="6" value="2" style="width:100%;">
+              <span class="hlRectStrokeWidthVal" style="font-size:11px;color:#888;">2px</span>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:11px;display:block;margin-bottom:2px;color:#666;">边框样式</label>
+              <select class="hlRectStrokeStyle" style="width:100%;padding:4px;font-size:12px;">
+                <option value="solid">直线</option>
+                <option value="dashed">虚线</option>
+                <option value="dotted">点线</option>
+              </select>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" class="hl-up-applyall"> 应用于整页标注
+              </label>
+            </div>
+            <div class="hl-up-actions" style="display:flex;gap:6px;">
+              <button class="hl-up-apply" style="flex:1;padding:5px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">应用</button>
+              <button class="hl-up-reset" style="flex:1;padding:5px;background:#f1f1f1;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">重置</button>
+              <button class="hlApplySelected" style="flex:1;padding:5px;background:#f9f9f9;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">应用于选中</button>
+            </div>
+          </div>
+        </div>
+        <!-- 卡片配置面板 -->
+        <div id="hlCardPanel" class="hl-config-panel" style="display:none;">
+          <div class="hl-up-header hl-drag-handle">
+            <strong>⠿ 卡片配置</strong>
+            <button class="hl-up-close" title="折叠面板">&minus;</button>
+          </div>
+          <div class="hl-up-body">
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">背景色</label>
+              <input type="color" class="hl-up-color" value="#fffdf6" style="width:100%;height:28px;border:none;cursor:pointer;">
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:block;margin-bottom:3px;">透明度</label>
+              <input type="range" class="hl-up-opacity" min="10" max="100" value="85" style="width:100%;">
+              <span class="hl-up-opacity-val" style="font-size:11px;color:#888;">85%</span>
+            </div>
+            <div class="hl-up-row" style="margin-bottom:8px;">
+              <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" class="hl-up-applyall"> 应用于整页标注
+              </label>
+            </div>
+            <!-- 卡片配置 actions -->
+            <div class="hl-up-actions" style="display:flex;gap:6px;">
+              <button class="hl-up-apply" style="flex:1;padding:5px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">应用</button>
+              <button class="hl-up-reset" style="flex:1;padding:5px;background:#f1f1f1;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">重置</button>
+              <button class="hlApplySelected" style="flex:1;padding:5px;background:#f9f9f9;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:12px;">应用于选中</button>
+            </div>
+          </div>
+        </div>
+      <div class="pdf-reader-body">
+        <div id="pdfTOC" class="pdf-toc" style="display:none">
+          <div class="pdf-toc-header">
+            <span>目录</span>
+            <button id="btnCloseTOC" class="pdf-toc-close">✕</button>
+          </div>
+          <div id="pdfTOCList" class="pdf-toc-list"></div>
+        </div>
+        <div id="pdfViewport" class="pdf-viewport">
+          <div id="pdfEmpty" class="pdf-empty">从书架选择书籍开始阅读</div>
+        </div>
+        <!-- 划重点图例面板：标注颜色释义，位于视口左侧不挡住内容 -->
+        <div id="pdfReaderNotesPanel" class="pdf-reader-notes-panel">
+          <div class="pdf-reader-notes-head">标注说明</div>
+          <div id="pdfReaderNotesBody" class="pdf-reader-notes-body"></div>
+        </div>
+      </div>
+    </section>
+    <div id="splitter" class="splitter"></div>
+    <section id="notebook" class="panel">
+      <div id="notebookToolbar" class="notebook-toolbar">
+        <div class="tb-group">
+          <button id="btnReturnToFileManager" class="notebook-btn" title="返回笔记文件管理空间" style="display:none;background:rgba(201,162,39,.18);">⬅ 返回</button>
+          <button id="btnToggleNotebookTOC" class="notebook-btn" title="笔记目录">📑 目录</button>
+          <span id="notebookPageInfo" class="notebook-page-info">第 1 页</span>
+          <button id="btnPrevNotePage" class="notebook-btn" title="上一页">◀</button>
+          <button id="btnNextNotePage" class="notebook-btn" title="下一页">▶</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="btnToggleMdMode" class="notebook-btn" title="切换 MD 编辑模式">MD</button>
+        </div>
+        <span class="tb-sep"></span>
+        <!-- 开始工具栏（Word式格式），可展开/收起 -->
+        <div class="tb-group">
+          <button id="btnToggleHomeToolbar" class="notebook-btn" title="开始：展开格式工具栏">🏠 开始</button>
+        </div>
+        <div id="homeToolbar" class="home-toolbar" style="display:none;width:100%;order:99;margin-top:4px;padding-top:6px;border-top:1px dashed var(--nav-border);">
+          <div class="tb-group" style="gap:6px;">
+            <span class="ht-group-label">字体</span>
+            <select id="htFontFamily" class="ht-select" title="字体">
+              <option value="">默认（手写体）</option>
+              <option value="'Microsoft YaHei','PingFang SC',sans-serif">微软雅黑</option>
+              <option value="'SimSun','STSong',serif">宋体</option>
+              <option value="'KaiTi','STKaiti',serif">楷体</option>
+              <option value="'SimHei','STHeiti',sans-serif">黑体</option>
+              <option value="'FangSong','STFangsong',serif">仿宋</option>
+              <option value="'Consolas','Courier New',monospace">Consolas 等宽</option>
+              <option value="'Times New Roman',serif">Times New Roman</option>
+            </select>
+            <select id="htFontSize" class="ht-select" title="字号">
+              <option value="">字号</option>
+              <option value="12">12px</option>
+              <option value="14">14px</option>
+              <option value="16">16px</option>
+              <option value="18">18px</option>
+              <option value="20">20px</option>
+              <option value="24">24px</option>
+              <option value="28">28px</option>
+              <option value="32">32px</option>
+              <option value="36">36px</option>
+              <option value="48">48px</option>
+            </select>
+            <input id="htFontColor" type="color" class="ht-color" title="文字颜色" value="#3b3229">
+            <input id="htBgColor" type="color" class="ht-color" title="背景色（高亮）" value="#fff9a8">
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group" style="gap:4px;">
+            <span class="ht-group-label">样式</span>
+            <button class="ht-btn ht-bold" type="button" title="加粗 (Ctrl+B)"><b>B</b></button>
+            <button class="ht-btn ht-italic" type="button" title="斜体 (Ctrl+I)"><i>I</i></button>
+            <button class="ht-btn ht-underline" type="button" title="下划线 (Ctrl+U)"><u>U</u></button>
+            <button class="ht-btn ht-strike" type="button" title="删除线"><s>S</s></button>
+            <button class="ht-btn ht-sup" type="button" title="上标 (Ctrl++)">x²</button>
+            <button class="ht-btn ht-sub" type="button" title="下标 (Ctrl+)">x₂</button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group" style="gap:4px;">
+            <span class="ht-group-label">列表</span>
+            <button class="ht-btn ht-ul" type="button" title="无序列表">• List</button>
+            <button class="ht-btn ht-ol" type="button" title="有序列表">1. List</button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group" style="gap:4px;">
+            <span class="ht-group-label">插入</span>
+            <button class="ht-btn ht-table" type="button" title="插入表格">⊞ 表格</button>
+            <button class="ht-btn ht-chart" type="button" title="插入图表（调用AI生成指令）">📊 图表</button>
+            <button class="ht-btn ht-image" type="button" title="插入图片">🖼 图片</button>
+            <button class="ht-btn ht-link" type="button" title="插入链接">🔗 链接</button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group" style="gap:4px;">
+            <button class="ht-btn ht-clear" type="button" title="清除格式">🗑 清除</button>
+          </div>
+          <input type="file" id="htImageFile" accept="image/*" style="display:none" />
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="btnToggleCommandQueue" class="notebook-btn" title="指令队列（、、指令。。 待办）">📋 队列</button>
+          <button id="btnToggleBookmarks" class="notebook-btn" title="历史任务（已完成的 AI 任务）">📋 历史</button>
+          <button id="btnImportReference" class="notebook-btn" title="导入参考材料（Word/PPT/Excel/PDF/EPUB → Markdown）">📚 参考</button>
+          <input type="file" id="inputReferenceFile" accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.pdf,.epub,.md,.markdown,.txt" style="display:none" />
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="btnExportZip" class="notebook-btn" title="导出整书包笔记备份（ZIP，含笔记/书签/指令/参考材料，可选 PDF）">⬇ 导出</button>
+          <button id="btnImportZip" class="notebook-btn" title="导入笔记备份（ZIP 恢复，幂等去重）">⬆ 导入</button>
+          <input type="file" id="inputZipFile" accept=".zip" style="display:none" />
+          <button id="btnPrintNote" class="notebook-btn" title="打印当前笔记页（横线样式）">🖨 打印</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <select id="selectFontSize" class="notebook-font-select" title="字体大小">
+            <option value="">默认</option>
+            <option value="14px">14px</option>
+            <option value="16px">16px</option>
+            <option value="18px">18px</option>
+            <option value="20px">20px</option>
+            <option value="22px">22px</option>
+            <option value="24px">24px</option>
+            <option value="28px">28px</option>
+          </select>
+          <input type="color" id="inputFontColor" class="notebook-color-picker" title="字体颜色" value="#5a4a2a">
+          <button id="btnResetFont" class="notebook-btn" title="重置字体样式">↺</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="btnUndo" class="notebook-btn" title="撤销 (Undo)" aria-label="撤销" disabled>↩ 撤销</button>
+          <button id="btnRedo" class="notebook-btn" title="重做 (Redo)" aria-label="重做" disabled>↪ 重做</button>
+        </div>
+        <div class="tb-group tb-group-end">
+          <input id="inputNotebookSearch" type="text" class="notebook-search" placeholder="搜索笔记内容...">
+          <!-- 全页面观看按钮：默认隐藏，打开一本笔记后在右侧显示 -->
+          <button id="btnFullPageNote" class="notebook-btn" title="全页面观看笔记（全屏）" style="display:none;font-weight:600;background:rgba(43,69,48,.15);">⛶ 全屏笔记</button>
+        </div>
+      </div>
+      <div id="notebookBody" class="notebook-body">
+        <!-- ====== 教材专属 笔记文件管理器（左侧栏） ====== -->
+        <aside id="noteFileManager" class="note-file-manager">
+          <div class="nfm-header">
+            <div class="nfm-header-row">
+              <span class="nfm-title">📁 笔记空间</span>
+              <button id="nfmToggleCollapse" class="nfm-collapse-btn" title="收起/展开笔记空间" type="button">◀</button>
+            </div>
+            <span id="nfmBookName" class="nfm-book-name" title="当前教材">未选择教材</span>
+          </div>
+          <div class="nfm-toolbar">
+            <button class="nfm-btn" id="nfmNewNote" title="新建笔记 (Ctrl+N)" accesskey="n">📝 新建</button>
+            <button class="nfm-btn" id="nfmNewFolder" title="新建文件夹">📁 文件夹</button>
+            <button class="nfm-btn" id="nfmImport" title="导入 ZIP 笔记包">⬆ 导入</button>
+            <button class="nfm-btn" id="nfmExportPkg" title="导出当前选中项（系统用ZIP）">⬇ 导出</button>
+            <input type="file" id="nfmImportFile" accept=".zip" style="display:none" />
+          </div>
+          <div class="nfm-tree-header">
+            <span class="nfm-th-name">名称</span>
+            <span class="nfm-th-actions">操作</span>
+          </div>
+          <div id="nfmTree" class="nfm-tree"></div>
+          <div class="nfm-footer">
+            <span class="nfm-tip">提示：双击打开；右键或点击操作进行 重命名/删除/复制/剪切/粘贴/导出PDF</span>
+          </div>
+        </aside>
+
+        <!-- ====== 中间：原有笔记目录 + 书签 + 队列 + 纸张 ====== -->
+        <div class="notebook-body-main" style="flex:1;display:flex;flex-direction:column;min-width:0;position:relative;">
+          <div id="notebookTOC" class="notebook-toc" style="display:none">
+            <div class="notebook-toc-header">
+              <span>📖 笔记目录</span>
+            </div>
+            <div id="notebookTOCList" class="notebook-toc-list"></div>
+          </div>
+          <div id="bookmarkPanel" class="bookmark-panel" style="display:none">
+            <div class="bookmark-header">
+              <span>📋 历史任务</span>
+              <button id="btnCloseBookmarks" class="bookmark-close" title="关闭" aria-label="关闭">✕</button>
+            </div>
+            <div id="bookmarkList" class="bookmark-list"></div>
+          </div>
+          <div id="commandQueuePanel" class="command-queue-panel" style="display:none">
+            <div class="command-queue-header">
+              <span>📋 指令队列</span>
+              <button id="btnCloseCommandQueue" class="command-queue-close" title="关闭" aria-label="关闭">✕</button>
+            </div>
+            <div id="commandQueueList" class="command-queue-list"></div>
+          </div>
+          <div id="notebookPaper" class="notebook-paper">
+            <div id="pageDirectoryPanel" class="page-directory collapsed">
+              <div class="page-directory-header">
+                <span><span class="dir-arrow">▼</span> 本页目录</span>
+                <span class="dir-refresh" title="刷新目录">🔄</span>
+              </div>
+              <div class="page-directory-body"></div>
+            </div>
+            <div id="notebookContent" class="notebook-content" contenteditable="false">
+              <div class="notebook-empty">请从左侧「笔记空间」选择或新建一本笔记<br>或切换到「📋 分栏/笔记」模式，从 PDF 划选文本即可推送到这里</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <!-- P3-16 附件管理视图 -->
+    <section id="attachView" class="attach-view" style="display:none;">
+      <div class="attach-header">
+        <h2 class="attach-title">📎 附件管理</h2>
+        <div class="attach-toolbar">
+          <select id="attachBookSelect" class="attach-book-select" title="选择教材"></select>
+          <button id="btnAttachNewFolder" class="attach-btn" title="新建文件夹">📁＋</button>
+          <button id="btnAttachUpload" class="attach-btn" title="上传文件">📤 上传</button>
+          <input type="file" id="inputAttachFile" multiple style="display:none">
+          <button id="btnAttachExport" class="attach-btn" title="导出选中">📥 导出</button>
+          <button id="btnAttachDelete" class="attach-btn attach-btn-danger" title="删除选中">🗑 删除</button>
+        </div>
+      </div>
+      <div class="attach-body">
+        <div id="attachTree" class="attach-tree" tabindex="0"></div>
+        <div id="attachPreview" class="attach-preview">
+          <div class="attach-preview-empty">选择一个文件预览，或拖拽文件到此区域上传</div>
+        </div>
+      </div>
+      <div class="attach-drop-hint" id="attachDropHint">松开鼠标上传文件</div>
+    </section>
+  </main>
+</div>
+<!-- 设置弹窗 -->
+<div id="settingsModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" style="display:none">
+  <div class="modal-content">
+    <h3 id="settingsModalTitle">AI 配置</h3>
+    <label>AI 厂商
+      <select id="selectProvider">
+        <option value="openai">OpenAI</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="doubao">豆包</option>
+        <option value="siliconflow">硅基流动</option>
+      </select>
+    </label>
+    <label>API Key
+      <input id="inputApiKey" type="password" placeholder="sk-...">
+    </label>
+    <label>Base URL
+      <input id="inputBaseUrl" type="text" placeholder="https://api.openai.com/v1">
+    </label>
+    <label>模型名称（可选）
+      <input id="inputModel" type="text" placeholder="留空使用默认">
+    </label>
+
+    <div class="cmd-marker-section">
+      <h4 class="cmd-marker-title">⚙️ 指令识别符号（自定义触发格式）</h4>
+      <p class="cmd-marker-hint">指令 = <b>开头符号</b> + 你要说的话 + <b>结尾符号</b>。例如 <code>↺ 总结。。</code>、<code>@ai 帮我改一下...</code><br>可以用任意特殊字符，如 <code>↺</code>、<code>✧</code>、<code>⌘</code>、<code>「」</code>、<code>「」</code> 等</p>
+      <label>开头符号（可填多个，用逗号分隔，例：↺, @ai , 、、）
+        <input id="inputCmdOpen" type="text" placeholder="↺, @ai , 、、">
+      </label>
+      <label>结尾符号（可填多个，用逗号分隔，例：。。, ...）
+        <input id="inputCmdClose" type="text" placeholder="。。, ...">
+      </label>
+      <button id="btnResetCmdMarkers" class="btn-secondary cmd-reset-btn" type="button">恢复默认</button>
+    </div>
+
+    <!-- ============ 技能启用配置面板 ============ -->
+    <div class="ai-skills-section">
+      <h4 class="cmd-marker-title">🧩 技能启用（书虫专属 Skills）</h4>
+      <p class="cmd-marker-hint">只有开启的技能才会出现在 AI 的技能目录里。<b>系统专属 = 为教材阅读器定制；内置通用 = 通用文献能力</b>。关闭后模型不会再匹配调用该技能。</p>
+      <div class="ai-skills-toolbar">
+        <button id="btnSkillsEnableAll"  type="button" class="btn-secondary btn-sm">全部启用</button>
+        <button id="btnSkillsDisableAll" type="button" class="btn-secondary btn-sm">全部禁用</button>
+        <button id="btnSkillsSystemOnly" type="button" class="btn-secondary btn-sm">只启用系统专属</button>
+        <span id="aiSkillsStatus" class="ai-skills-status"></span>
+      </div>
+      <div id="aiSkillsList" class="ai-skills-list">
+        <!-- 由 JS 动态填充：每个技能一行：开关 + 分组标签 + 技能名 + whenToUse -->
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button id="btnTestConnection" class="btn-secondary">测试连接</button>
+      <button id="btnSaveSettings" class="btn-primary">保存</button>
+      <button id="btnCloseSettings" class="btn-secondary">取消</button>
+    </div>
+    <div id="connectionStatus" class="status-text"></div>
+  </div>
+</div>
+<!-- Skill 面板（学习偏好 + 技能库，Tab 切换） -->
+<div id="skillModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="skillModalTitle" style="display:none">
+  <div class="modal-content skill-modal-content">
+    <div class="skill-modal-header">
+      <h3 id="skillModalTitle">🎯 技能中心</h3>
+      <div class="skill-tab-bar" role="tablist">
+        <button class="skill-tab-btn skill-tab-active" data-tab="pref" role="tab" aria-selected="true">📊 学习偏好</button>
+        <button class="skill-tab-btn" data-tab="lib" role="tab" aria-selected="false">🧩 技能库</button>
+      </div>
+    </div>
+
+    <!-- Tab 1：学习偏好（SkillManager） -->
+    <div id="skillTabPref" class="skill-tab-content" style="display:block">
+      <div class="skill-stats">
+        <span id="skillTotalOps">总操作: 0</span>
+        <span id="skillTagCount">标签: 0</span>
+      </div>
+      <div id="skillTagList" class="skill-tag-list"></div>
+      <div class="skill-add-tag">
+        <input id="inputSkillTag" type="text" placeholder="标签名称" class="skill-input">
+        <select id="selectSkillCategory" class="skill-select">
+          <option value="custom">自定义</option>
+          <option value="topic">主题</option>
+          <option value="command">指令</option>
+        </select>
+        <button id="btnAddSkillTag" class="btn-primary">添加</button>
+      </div>
+      <div class="modal-actions modal-actions-inline">
+        <button id="btnResetSkill" class="btn-secondary">重置全部偏好</button>
+      </div>
+    </div>
+
+    <!-- Tab 2：技能库（SkillSystem） -->
+    <div id="skillTabLib" class="skill-tab-content skill-tab-lib" style="display:none">
+      <div class="skill-lib-toolbar">
+        <button id="btnSkillNew" type="button" class="btn-primary">➕ 新建技能</button>
+        <button id="btnSkillImport" type="button" class="btn-secondary">📥 导入 MD</button>
+        <input id="inputSkillImportFile" type="file" accept=".md,.txt,.yaml,.yml" style="display:none">
+        <button id="btnSkillExportAll" type="button" class="btn-secondary">📤 导出全部</button>
+        <div class="skill-lib-hint">内置技能 = bundled（不可删除，可覆盖编辑）；自定义技能 = user</div>
+      </div>
+      <div class="skill-lib-main">
+        <!-- 左栏：技能列表 -->
+        <div id="skillLibList" class="skill-lib-list"></div>
+        <!-- 右栏：技能编辑器 -->
+        <div id="skillLibEditor" class="skill-lib-editor">
+          <div class="skill-editor-empty" id="skillEditorEmpty">← 从左侧选择一个技能，或点击顶部「➕ 新建技能」</div>
+          <div id="skillEditorForm" style="display:none">
+            <div class="skill-editor-row">
+              <label>技能名称（唯一标识，英文，如 my-skill）</label>
+              <input id="skillEditorName" type="text" class="skill-input" placeholder="my-skill">
+            </div>
+            <div class="skill-editor-row">
+              <label>简介（一句话描述功能，会出现在 AI 上下文中）</label>
+              <input id="skillEditorDesc" type="text" class="skill-input" placeholder="专业 XXX 设计创作，当用户需要...时使用">
+            </div>
+            <div class="skill-editor-row">
+              <label>触发条件（whenToUse，用中文关键词或短句，AI 据此自动匹配）</label>
+              <textarea id="skillEditorWhen" class="skill-input skill-textarea-sm" placeholder="用户的指令涉及 XXX、YYY、ZZZ 等场景时"></textarea>
+            </div>
+            <div class="skill-editor-row">
+              <label>技能正文（Markdown 格式，会完整注入 AI 系统提示词；YAML frontmatter 自动识别）</label>
+              <textarea id="skillEditorBody" class="skill-input skill-textarea-lg" placeholder="# My Skill&#10;&#10;## 核心原则&#10;当用户...你必须...&#10;&#10;### 输出格式&#10;..."></textarea>
+            </div>
+            <div class="skill-editor-meta">
+              <span id="skillEditorSource" class="skill-source-tag"></span>
+              <button id="btnSkillResetBuiltin" type="button" class="btn-secondary btn-sm" style="display:none">↩ 恢复内置版本</button>
+            </div>
+            <div class="modal-actions modal-actions-inline">
+              <button id="btnSkillDelete" type="button" class="btn-danger">🗑 删除此技能</button>
+              <button id="btnSkillSave" type="button" class="btn-primary">💾 保存</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 共享：关闭按钮 -->
+    <div class="modal-actions">
+      <button id="btnCloseSkill" class="btn-secondary">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- 参考资料管理器（P2）：点击导航栏「参考」按钮打开，三栏布局：上传+文件列表+预览+导入笔记 -->
+<div id="referenceManagerModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="rmModalTitle" style="display:none">
+  <div class="modal-content rm-modal-content">
+    <div class="rm-modal-header">
+      <h3 id="rmModalTitle">📚 参考资料管理器</h3>
+      <div class="rm-modal-book" id="rmCurBookHint">当前教材：-</div>
+    </div>
+    <div class="rm-main">
+      <!-- 左：上传区 + 工具栏 -->
+      <div class="rm-left">
+        <div class="rm-uploader" id="rmUploader" tabindex="0">
+          <div class="rm-uploader-icon">📤</div>
+          <div class="rm-uploader-text">拖放文件到此处，或点击选择</div>
+          <div class="rm-uploader-sub">支持 .md .txt .docx .xlsx .pdf .epub .pptx .csv 等任何格式，自动识别并转成 Markdown</div>
+          <input id="rmFileInput" type="file" multiple style="display:none">
+        </div>
+        <div class="rm-toolbar">
+          <input id="rmSearchInput" type="text" class="rm-input" placeholder="🔍 搜索文件名...">
+          <button id="btnRmBulkDelete" class="btn-secondary btn-sm" type="button">🗑 批量删除</button>
+        </div>
+        <div id="rmFileList" class="rm-filelist"></div>
+      </div>
+      <!-- 右：预览区 + 操作 -->
+      <div class="rm-right">
+        <div class="rm-preview-head">
+          <div class="rm-preview-head-title" id="rmPreviewTitle">← 从左侧选择文件</div>
+          <div class="rm-preview-head-actions">
+            <button id="btnRmRefreshMd" class="btn-secondary btn-sm" type="button" style="display:none">🔄 重新解析</button>
+            <button id="btnRmDownloadMd" class="btn-secondary btn-sm" type="button" style="display:none">⬇ 下载 MD</button>
+            <button id="btnRmInsertNote" class="btn-primary btn-sm" type="button" style="display:none">📥 导入到当前笔记</button>
+            <button id="btnRmDeleteOne" class="btn-danger btn-sm" type="button" style="display:none">🗑 删除</button>
+          </div>
+        </div>
+        <div class="rm-preview-tabs">
+          <button class="rm-ptab rm-ptab-active" data-ptab="md">MD 正文</button>
+          <button class="rm-ptab" data-ptab="meta">元数据</button>
+        </div>
+        <div id="rmPreviewMd" class="rm-preview-pane md-content"></div>
+        <div id="rmPreviewMeta" class="rm-preview-pane rm-preview-meta" style="display:none"></div>
+      </div>
+    </div>
+    <div id="rmStatusBar" class="rm-status-bar">就绪</div>
+    <div class="modal-actions rm-footer">
+      <div class="rm-footer-hint">TXT/MD 直读 · DOCX→Mammoth · XLSX/CSV→MD表 · PDF→PDF.js 提文 · 图片→AI读图 · 其他格式请先转 MD/TXT/DOCX 再导入</div>
+      <button id="btnCloseRm" class="btn-secondary">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- 帮助中心 -->
+<div id="helpOverlay" class="help-overlay">
+  <div class="help-modal" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+    <div class="help-modal-header">
+      <span class="help-modal-title" id="helpModalTitle">📖 教材阅读器 · 使用教程</span>
+      <button id="btnCloseHelp" class="help-close-btn" title="关闭教程" aria-label="关闭教程">✕</button>
+    </div>
+    <div class="help-modal-body">
+      <aside id="helpSidebar" class="help-sidebar"></aside>
+      <main id="helpLessonBody" class="help-lesson-body"></main>
+    </div>
+  </div>
+</div>
+<div id="versionBadge" title="当前版本">v146</div>
+<pre id="__errDump" style="position:fixed;bottom:0;left:0;right:0;max-height:200px;overflow:auto;background:#ffebee;color:#c62828;padding:8px;font-size:12px;z-index:99999;margin:0;display:none;"></pre>
+<!-- 全局错误捕获 -->
+<script>
+window._errLog = [];
+window.addEventListener('error', function(e) {
+  var msg = '[JS错误] ' + e.message + ' @ ' + e.filename + ':' + e.lineno;
+  window._errLog.push(msg);
+  console.error(msg, e.error);
+  var el = document.getElementById('__errDump');
+  if (el) { el.textContent = window._errLog.join('\\n'); el.style.display = 'block'; }
+});
+window.addEventListener('unhandledrejection', function(e) {
+  var msg = '[Promise异常] ' + (e.reason ? (e.reason.message || e.reason) : 'unknown');
+  window._errLog.push(msg);
+  console.error(msg, e.reason);
+  var el = document.getElementById('__errDump');
+  if (el) { el.textContent = window._errLog.join('\\n'); el.style.display = 'block'; }
+});
+</script>
+<!-- 模块脚本（顺序加载，后者依赖前者） -->
+<script src="js/data-layer.js?v=146"></script>
+  <script src="js/zip-utils.js?v=146"></script>
+  <script src="js/command-queue.js?v=146"></script>
+  <script src="js/file-manager.js?v=146"></script>
+  <script src="js/ai-adapter.js?v=146"></script>
+  <script src="js/pdf-reader.js?v=146"></script>
+  <script src="js/pdf-annotate.js?v=146"></script>
+  <script src="js/diff.js?v=146"></script>
+  <script src="js/md-convert.js?v=146"></script>
+  <script src="js/reference-manager.js?v=146"></script>
+  <script src="js/notebook.js?v=146"></script>
+  <script src="js/note-file-manager.js?v=146"></script>
+  <script src="js/attachment-manager.js?v=146"></script>
+  <script src="js/skill-manager.js?v=146"></script>
+  <script src="js/skill-system.js?v=146"></script>
+  <script src="js/ai-engine.js?v=146"></script>
+  <script src="js/help-center.js?v=146"></script>
+<!-- 阿里 PageAgent：纯前端 GUI Agent，AI 自主操控网页（autoInit=false 不自动弹免费 demo 面板） -->
+  <script src="https://registry.npmmirror.com/page-agent/1.12.2/files/dist/iife/page-agent.demo.js?autoInit=false" crossorigin="anonymous" onerror="console.warn('[PageAgent] CDN 加载失败，跳过自主操作能力')"></script>
+  <!-- 保存阿里 PageAgent 构造函数到独立全局名，避免被下方 js/page-agent.js 的 var PageAgent 覆盖 -->
+  <script>window.AlibabaPageAgent = window.PageAgent;</script>
+  <script src="js/page-agent.js?v=146"></script>
+  <script src="js/app-shell.js?v=146"></script>
+  <script src="js/shelf-jellyfish.js?v=146"></script>
+  <!-- CodeMirror 6 原型（MD 笔记本编辑器底座，独立于现有 notebook.js 数据模型）
+       注：ESM 脚本会在所有同步脚本后执行，所以 notebook.js 初始化时 __cm 尚不可用。
+       notebook.js 在创建编辑器前会等 __cmReady 事件（最多 5s），避免出现"CodeMirror 未加载"空壳。 -->
+  <link rel="modulepreload" href="./lib/codemirror/codemirror.bundle.js">
+  <!-- 隐藏的 CodeMirror 原型容器：仅用于加载校验 bundle 并发出 __cmReady 事件，不占页面空间 -->
+  <div id="cm-prototype" style="display:none !important;position:absolute !important;left:-99999px !important;top:-99999px !important;width:0 !important;height:0 !important;overflow:hidden !important;pointer-events:none !important;visibility:hidden !important;"></div>
+  <script type="module">
+    import { EditorView, basicSetup, markdown, markdownLanguage } from './lib/codemirror/codemirror.bundle.js';
+    // 挂载到 window，供 IIFE 结构的 notebook.js 读取
+    window.__cm = { EditorView, basicSetup, markdown, markdownLanguage };
+    try {
+      const container = document.getElementById('cm-prototype');
+      if (container) {
+        const view = new EditorView({
+          doc: '# 书虫蛊 MD 笔记本原型\n\n## 测试 CodeMirror 6\n\n- 支持 **加粗** 与 *斜体*\n- 支持 `行内代码`\n\n> 引用测试\n\n```js\nconsole.log("hello");\n```\n',
+          extensions: [basicSetup, markdown({ base: markdownLanguage })],
+          parent: container
+        });
+        window.__cmPrototype = view;
+      }
+    } catch (_) {}
+    // 发出准备好事件：notebook.js 通过 document 侦听来延迟创建编辑器
+    try { document.dispatchEvent(new CustomEvent('__cmReady', { detail: { t: Date.now() } })); } catch (_) {}
+    window.__cmReadyFlag = true;
+  </script>
+</body>
+</html>
