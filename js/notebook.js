@@ -263,6 +263,9 @@ const Notebook = (function() {
     // --- 开始工具栏（Word 式格式工具栏）绑定 ---
     _bindHomeToolbar();
 
+    // --- 图片：全局粘贴 / 拖拽导入（2026-08-19） ---
+    try { _bindGlobalImageHandlers(); } catch (e) {}
+
     // ---- P5 书签栏 ----
     var btnBookmarks = document.getElementById('btnToggleBookmarks');
     var btnCloseBookmarks = document.getElementById('btnCloseBookmarks');
@@ -1044,6 +1047,14 @@ const Notebook = (function() {
       '      <div class="am-label">💡 设计理由（AI 为什么这样改）</div>',
       '      <textarea class="am-reason" rows="4" readonly></textarea>',
       '    </div>',
+      '    <div class="am-section am-ai-warn-section" style="display:none;">',
+      '      <div class="am-label">⚠️ AI 连接状态</div>',
+      '      <div class="am-ai-warn"></div>',
+      '    </div>',
+      '    <div class="am-section am-content-section" style="display:none;">',
+      '      <div class="am-label">📄 将写入正文的内容（预览）</div>',
+      '      <div class="am-content-preview"></div>',
+      '    </div>',
       '    <div class="am-section">',
       '      <div class="am-label">🛠️ 操作列表（统一为 edit 工具 operations[]）</div>',
       '      <div class="am-ops-list"></div>',
@@ -1238,6 +1249,30 @@ const Notebook = (function() {
     qs('.am-reason').value = plan.reason || '(AI 未给出理由)';
     qs('.am-ops-list').innerHTML = _renderApprovalOpsList(plan.operations);
     qs('.am-diff-box').innerHTML = _renderApprovalDiffBox(preMd, postMd, plan.operations);
+    // 2026-08-18：审批阶段即可见 AI 连接状态与将写入正文的内容（此前非 edit 指令的 contentMd
+    // 只在批准写入正文后才可见，用户无法在批准前发现"AI 未连通 / 只会产出占位"）
+    var warnSec = qs('.am-ai-warn-section');
+    if (warnSec) {
+      var warnBox = qs('.am-ai-warn');
+      if (plan.aiError) {
+        if (warnBox) warnBox.textContent = plan.aiError;
+        warnSec.style.display = '';
+      } else {
+        warnSec.style.display = 'none';
+      }
+    }
+    var cmSec = qs('.am-content-section');
+    if (cmSec) {
+      var cmBox = qs('.am-content-preview');
+      var cmText = (plan.contentMd && String(plan.contentMd).trim()) ? String(plan.contentMd) : '';
+      if (cmText) {
+        try { if (cmBox) cmBox.innerHTML = renderMarkdown(cmText); } catch (e) { if (cmBox) cmBox.textContent = cmText; }
+        try { if (cmBox) _resolvePreviewImages(cmBox); } catch (e) {}
+        cmSec.style.display = '';
+      } else {
+        cmSec.style.display = 'none';
+      }
+    }
   }
 
   // 2026-08-15 P2 重构：书签栏 → 历史任务栏
@@ -1448,6 +1483,31 @@ const Notebook = (function() {
     _renderMdSubMode(page);
   }
 
+  // 2026-08-18：预览态末尾空输入行补齐——统计末尾连续空 P 段落，不足则追加 <p><br></p>。
+  // 解决「每次都要先换行才能编辑下一行」的体验问题：点击任意空行即可直接输入，
+  // 输入后空行仍保持在最下方，永不污染 mdContent（htmlToMarkdown 后经 md.trim() 清理）。
+  var _PREVIEW_TRAILING_LINES = 20;
+  function _ensurePreviewTrailingLines(preview, target) {
+    if (!preview || !preview.appendChild) return;
+    target = (typeof target === 'number' && target > 0) ? target : _PREVIEW_TRAILING_LINES;
+    var nodes = preview.childNodes;
+    var blank = 0;
+    var i = nodes.length - 1;
+    while (i >= 0) {
+      var n = nodes[i];
+      var isBlankP = (n.nodeType === 1 && n.tagName === 'P' && !(n.textContent || '').trim());
+      if (!isBlankP) break;
+      blank++;
+      i--;
+    }
+    var need = target - blank;
+    for (var k = 0; k < need; k++) {
+      var p = document.createElement('p');
+      p.innerHTML = '<br>';
+      preview.appendChild(p);
+    }
+  }
+
   /** 渲染 MD 子态：预览态 / 编辑态 */
   function _renderMdSubMode(page) {
     var area = document.getElementById('mdModeContent');
@@ -1524,9 +1584,13 @@ const Notebook = (function() {
       preview.setAttribute('data-md-preview', '1');
       if (page.mdContent && String(page.mdContent).trim() !== '') {
         preview.innerHTML = renderMarkdown(page.mdContent);
+        // 2026-08-19 图片：异步加载 IndexedDB 中的图片并应用尺寸/对齐设置
+        try { _resolvePreviewImages(preview); } catch (e) {}
       } else {
         preview.innerHTML = '<p><br></p>';
       }
+      // 2026-08-18：渲染后末尾补足空输入行（点击任意空行即可直接输入）
+      try { _ensurePreviewTrailingLines(preview); } catch (e) {}
       preview.classList.add('preview-mode-active');
       preview.addEventListener('input', function() { _onMdPreviewInput(page, preview); });
       preview.addEventListener('blur', function() { _onMdPreviewBlur(page, preview); });
@@ -1537,6 +1601,8 @@ const Notebook = (function() {
       _initBlockActionButtons(preview, page);
       // 绑定块的拖拽 + 调整大小（仅预览模式生效）
       _initBlockResizeAndDrag(preview, page);
+      // 2026-08-19 图片：绑定点击 → 尺寸/对齐/删除 浮动操作条
+      try { _bindImageInteractions(preview); } catch (e) {}
     }
     // 最后再同步一次工具栏启用/禁用状态（防止被样式更新覆盖）
     _updateToolbarState();
@@ -1869,6 +1935,8 @@ const Notebook = (function() {
 
   /** 预览态输入 → 防抖写回（不重渲染，保留光标） */
   function _onMdPreviewInput(page, previewEl) {
+    // 2026-08-18：输入后末尾空输入行保持补足（不移动光标；用户在新空行里输入 → 该行变实 → 末尾自动再补一行）
+    try { _ensurePreviewTrailingLines(previewEl); } catch (e) {}
     // 实时：输入第二个 、 即触发指令识别入队（textContent 快速短路后再走防抖写回）
     _syncLiveFromPreview(page, previewEl);
     // 实时：未闭合「、、」后续文字切换为指令书写格式（所见即所得）
@@ -3100,6 +3168,8 @@ const Notebook = (function() {
         // 2026-08-16 改造：@[html:ID] → 沙盒 iframe；@[diagram:ID] → Canvas 编辑器容器
         html = _postProcessHtmlRefs(html);
         html = _postProcessDiagramBlocks(html);
+        // 2026-08-19 图片：scimg:// 引用 → 可交互图片容器（真实 src 由 _resolvePreviewImages 异步加载）
+        html = _postProcessImageRefs(html);
         // 验证输出：确保 HTML 标签存在（非纯文本）
         if (html && html.indexOf('<') >= 0) return html;
         // 纯文本输出时手动转换换行
@@ -4400,6 +4470,210 @@ const Notebook = (function() {
     w.document.close();
   }
 
+  // ---------- 导出：把笔记页渲染为图片 / PDF（所见即所得）----------
+  // 2026-08-18：用 html2canvas 渲染预览 DOM；HTML 组件（iframe）先抓内容图替换为 <img>，
+  // 流程图（canvas）原生捕获 → 图片/PDF 与笔记预览一致。
+  // 2026-08-19 导出诊断：记录上一次导出的组件渲染成败（供失败时定位，导出文件缺组件时 console/弹窗有据可查）
+  var _lastExportDiag = null;
+  function _exportDiagSuffix() {
+    if (!_lastExportDiag) return '';
+    try { return '\n\n组件渲染诊断：' + JSON.stringify(_lastExportDiag); } catch (e) { return ''; }
+  }
+
+  async function _buildExportCanvas(pageId) {
+    if (typeof html2canvas === 'undefined') throw new Error('导出组件未加载（html2canvas）');
+    var page = _findPageById(pageId);
+    if (!page) throw new Error('页面不存在');
+    var md = (page && page.mdContent) || '';
+    // 2026-08-19 修复：mdContent 为空时先迁移 blocks → MD（同打印逻辑），
+    // 避免从未打开过 MD 预览的笔记页导出为空白
+    if (!String(md).trim() && typeof DataLayer !== 'undefined' && DataLayer.migratePageToMd) {
+      try { md = await DataLayer.migratePageToMd(page.id) || ''; } catch (e) { md = ''; }
+    }
+    var holder = document.createElement('div');
+    holder.className = 'md-preview md-content md-ruled-notebook export-holder';
+    holder.style.cssText = 'position:fixed;left:-12000px;top:0;width:860px;max-width:860px;background:#fff;z-index:-9999;padding:24px 28px;';
+    if (md && String(md).trim()) {
+      holder.innerHTML = renderMarkdown(md);
+    } else {
+      holder.innerHTML = '<p><br></p>';
+    }
+    document.body.appendChild(holder);
+    // 2026-08-19 导出诊断：收集各组件渲染成败
+    var diag = { mdLen: String(md || '').length, imgBoxes: 0, imgOk: 0, imgFail: 0, htmlFrames: 0, htmlOk: 0, htmlFail: 0, htmlFailReason: [], diagramBlocks: 0 };
+    var editorStart = _diagramEditors.length;
+    // 初始化流程图 canvas（渲染到离屏容器同样有效）
+    try { _initDiagramBlocks(holder, false); } catch (e) {}
+    try { diag.diagramBlocks = holder.querySelectorAll('.diagram-block').length; } catch (e) {}
+    // 2026-08-19 修复：导出前恢复块级组件的保存状态（浮动位置/宽高/等比缩放），
+    // 与预览栏所见一致——否则组件回到默认流式排布/默认尺寸，放大或移位的组件会显示不全
+    try { _applyBlocksUiForExport(holder, page); } catch (e) {}
+    // 移除交互元素（操作条/拖拽手柄/名称行/隐藏源码/调整边框），只留展示内容
+    try {
+      holder.querySelectorAll('.block-action-bar, .block-drag-handle, .html-resize-edge, .block-name-row, .html-source, .diagram-source, .block-mode-toggle').forEach(function(el) {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      });
+    } catch (e) {}
+    // 等流程图/iframe 渲染稳定（块 UI 应用 + 流程图 handleResize 需要时间）
+    await new Promise(function(res) { setTimeout(res, 650); });
+    // 2026-08-19 图片：导出前解析 scimg:// 引用（加载真实 blob URL）
+    try { await _resolvePreviewImages(holder); } catch (e) {}
+    // 2026-08-19 统计图片解析结果（.img-ready/.img-fail 由 _resolvePreviewImages 设置）
+    try {
+      diag.imgBoxes = holder.querySelectorAll('.note-img-box').length;
+      diag.imgOk = holder.querySelectorAll('.note-img-box.img-ready').length;
+      diag.imgFail = holder.querySelectorAll('.note-img-box.img-fail').length;
+    } catch (e) {}
+    // HTML 组件 iframe（srcdoc 同源）→ 抓取内容渲染为图片并原位替换
+    // 2026-08-19 增强：contentDocument 未就绪时重试（srcdoc 加载慢/复杂组件），避免抓图失败导出空白
+    var frames = holder.querySelectorAll('.html-block-container .html-iframe');
+    diag.htmlFrames = frames.length;
+    for (var i = 0; i < frames.length; i++) {
+      var frame = frames[i];
+      var fdoc = null;
+      for (var attempt = 0; attempt < 4 && !fdoc; attempt++) {
+        try { fdoc = frame.contentDocument; } catch (e) { fdoc = null; }
+        if (!fdoc || !fdoc.body) {
+          await new Promise(function(res) { setTimeout(res, 250); });
+          fdoc = null;
+        }
+      }
+      if (!fdoc || !fdoc.body) {
+        diag.htmlFail++;
+        diag.htmlFailReason.push('iframe-doc-未就绪');
+        continue;
+      }
+      try {
+        var fCanvas = await html2canvas(fdoc.body, { backgroundColor: '#ffffff', scale: 2, useCORS: true, logging: false });
+        var img = document.createElement('img');
+        img.src = fCanvas.toDataURL('image/png');
+        img.style.cssText = 'display:block;width:100%;border:none;';
+        // 2026-08-19 等比缩放（viewScale）：预览中 HTML 组件经 iframe transform 放大，
+        // 抓图后需对替换图施以相同缩放，导出与预览一致（变换边界计入容器扩展）
+        try {
+          var hc = frame.closest ? frame.closest('.html-block-container') : null;
+          if (hc) {
+            var hk = _blockUiKey(page, hc);
+            var hu = _loadBlockUi(hk);
+            if (hu && typeof hu.viewScale === 'number' && hu.viewScale > 0.1 && hu.viewScale < 10 && hu.viewScale !== 1) {
+              img.style.transformOrigin = 'top left';
+              img.style.transform = 'scale(' + hu.viewScale + ')';
+            }
+          }
+        } catch (e3) {}
+        if (frame.parentNode) frame.parentNode.replaceChild(img, frame);
+        diag.htmlOk++;
+      } catch (e2) {
+        diag.htmlFail++;
+        diag.htmlFailReason.push(String(e2 && e2.message ? e2.message : e2));
+      }
+    }
+    // 2026-08-19 修复：按实际渲染边界扩展导出容器——浮动组件（absolute）、放大组件（transform
+    // scale / 大图）不占文档流，若仍按行数高度计算，底部/右侧组件会被 html2canvas 裁切。
+    try { _expandExportHolder(holder); } catch (e) {}
+    // 2026-08-19 导出横线背景：html2canvas 不支持 repeating-linear-gradient，
+    // 用 DOM 层补画横线/红线（z-index:-1 位于内容下方，与笔记栏 .md-ruled-notebook 所见一致）
+    try { _addExportRuledLayer(holder); } catch (e) {}
+    // 2026-08-19 输出导出诊断（供失败定位；缺组件时 console 有据可查）
+    _lastExportDiag = diag;
+    try { console.info('[导出诊断]', JSON.stringify(diag)); } catch (e) {}
+    try {
+      var canvas = await html2canvas(holder, { backgroundColor: '#ffffff', scale: 2, useCORS: true, logging: false });
+      // 释放本次创建的临时 DiagramEditor 实例（避免残留引用）
+      if (_diagramEditors.length > editorStart) _diagramEditors.length = editorStart;
+      return canvas;
+    } catch (e) {
+      if (_diagramEditors.length > editorStart) _diagramEditors.length = editorStart;
+      throw e;
+    } finally {
+      try { if (holder.parentNode) holder.parentNode.removeChild(holder); } catch (e) {}
+    }
+  }
+
+  // 2026-08-19 导出专用：恢复块级组件（HTML/流程图）保存的展示状态（浮动位置/宽高/等比缩放）。
+  // 与预览栏 _initBlockResizeAndDrag → _applyBlockUi 同一数据源（shuchongu_blockui_*），
+  // 保证导出效果 = 预览所见。无保存数据时保持默认流式排布。
+  function _applyBlocksUiForExport(holder, page) {
+    if (!holder || !page) return;
+    var blocks = holder.querySelectorAll('.html-block-container, .diagram-block');
+    for (var i = 0; i < blocks.length; i++) {
+      try {
+        var key = _blockUiKey(page, blocks[i]);
+        var ui = _loadBlockUi(key);
+        if (ui) _applyBlockUi(blocks[i], ui);
+      } catch (e) {}
+    }
+  }
+
+  // 2026-08-19 导出专用：按全部内容的实际渲染边界扩展导出容器。
+  // 预览中组件可自由移动（absolute 浮动）、放大（transform scale / 自定义宽高 / 大图），
+  // 这些组件不占文档流高度，若容器只按行数高度绘制，底部/右侧组件会被 html2canvas 裁切。
+  // 此处遍历 holder 内所有可见元素，取其最大 right/bottom 扩展宽高，保证完整呈现。
+  function _expandExportHolder(holder) {
+    if (!holder) return;
+    var cs = window.getComputedStyle(holder);
+    var pt = parseFloat(cs.paddingTop) || 0;
+    var pb = parseFloat(cs.paddingBottom) || 0;
+    var pl = parseFloat(cs.paddingLeft) || 0;
+    var pr = parseFloat(cs.paddingRight) || 0;
+    var baseW = holder.offsetWidth || 860;
+    var baseH = holder.offsetHeight || 400;
+    var hr = holder.getBoundingClientRect();
+    var maxR = pl + Math.max(0, baseW - pl - pr);
+    var maxB = pt + Math.max(0, baseH - pt - pb);
+    var els = holder.querySelectorAll('*');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var r = el.getBoundingClientRect();
+      if (!r.width && !r.height) continue;
+      var right = r.left - hr.left + r.width;
+      var bottom = r.top - hr.top + r.height;
+      if (right > maxR) maxR = right;
+      if (bottom > maxB) maxB = bottom;
+    }
+    var newW = Math.max(baseW, Math.ceil(maxR + pr));
+    var newH = Math.max(baseH, Math.ceil(maxB + pb));
+    if (newW !== baseW) {
+      holder.style.width = newW + 'px';
+      holder.style.maxWidth = 'none';
+    }
+    if (newH !== baseH) holder.style.height = newH + 'px';
+  }
+
+  // 2026-08-19 导出专用横线背景层：html2canvas 不支持 repeating-linear-gradient（横线）与
+  // background-attachment:local，因此用 DOM 层补画——每 line-height 一条横线（#d8dee9）、
+  // 左侧 x=16px 一条红线（#e57373），z-index:-1 置于内容下方，与笔记栏 .md-ruled-notebook 一致。
+  function _addExportRuledLayer(holder) {
+    if (!holder) return;
+    var cs = window.getComputedStyle(holder);
+    var pt = parseFloat(cs.paddingTop) || 0;
+    var pb = parseFloat(cs.paddingBottom) || 0;
+    var pl = parseFloat(cs.paddingLeft) || 0;
+    var pr = parseFloat(cs.paddingRight) || 0;
+    var lh = parseFloat(cs.lineHeight) || 32;
+    if (lh <= 0) lh = 32;
+    var innerH = holder.clientHeight || holder.offsetHeight || 400;
+    // 横线层（覆盖内容区）
+    var layer = document.createElement('div');
+    layer.setAttribute('contenteditable', 'false');
+    layer.style.cssText = 'position:absolute;left:' + pl + 'px;right:' + pr + 'px;top:' + pt + 'px;bottom:' + pb + 'px;z-index:-1;pointer-events:none;overflow:hidden;';
+    var contentH = Math.max(0, innerH - pt - pb);
+    var count = Math.floor(contentH / lh) + 1;
+    var frag = document.createDocumentFragment();
+    for (var k = 1; k <= count; k++) {
+      var ln = document.createElement('div');
+      ln.style.cssText = 'position:absolute;left:0;right:0;top:' + Math.round(k * lh - 1) + 'px;height:1px;background:#d8dee9;';
+      frag.appendChild(ln);
+    }
+    layer.appendChild(frag);
+    holder.appendChild(layer);
+    // 左侧红线（padding-box 左缘 x=16px，覆盖整高）
+    var red = document.createElement('div');
+    red.setAttribute('contenteditable', 'false');
+    red.style.cssText = 'position:absolute;left:16px;top:0;bottom:0;width:1px;background:#e57373;z-index:-1;pointer-events:none;';
+    holder.appendChild(red);
+  }
+
   // ============================================================
   // 2026-08-15 扩展1：HTML 代码块 → 沙盒 iframe 渲染
   // 扩展2：@[diagram:ID] → Canvas 流程图编辑器（高自由度绘图）
@@ -4464,12 +4738,30 @@ const Notebook = (function() {
     var script = '<script>(function(){'
       + 'var paused=false,obs=null,timers=[];'
       + 'function r(){try{'
-      // 文档外壳已在 srcdoc 构建时剥离，scrollHeight 不再虚高；
-      // offsetHeight 与 scrollHeight 取大值，避免底部 margin 被裁剪
+      // 2026-08-19 修复：改为按「正常流内容下边界」计算高度。
+      // 旧逻辑 h=max(body.offsetHeight, body.scrollHeight) 在组件含 height:100vh 与
+      // 绝对定位溢出元素（如全屏背景+上升气泡）时形成正反馈：100vh 随 iframe 高度增大 →
+      // scrollHeight 计入绝对定位溢出 → 上报高度一路暴涨到 5000 钳制，iframe 被拉得异常长。
+      // 现排除 absolute/fixed 浮动层、只统计正常流可见元素最大 bottom（+body paddingBottom），
+      // 对 flex 居中的 100vh 组件收敛到内容高度（不动点=内容高），普通组件结果不变。
       + 'if(paused)return;'
-      + 'var b=document.body||document.documentElement;'
-      + 'var h=Math.max(b?b.offsetHeight:0, b?b.scrollHeight:0);'
-      + 'if(!h||h<0)h=0;'
+      + 'var body=document.body||document.documentElement;'
+      + 'var maxB=0;'
+      + 'var els=body?body.querySelectorAll(\'*\'):[];'
+      + 'for(var i=0;i<els.length;i++){try{'
+      + 'var el=els[i];'
+      + 'var st=window.getComputedStyle(el);'
+      + 'if(st.display===\'none\'||st.visibility===\'hidden\')continue;'
+      + 'var pos=st.position;'
+      + 'if(pos===\'absolute\'||pos===\'fixed\')continue;'
+      + 'var r=el.getBoundingClientRect();'
+      + 'if(r.width<=0&&r.height<=0)continue;'
+      + 'var b=r.top+r.height;'
+      + 'if(b>maxB)maxB=b;'
+      + '}catch(e){}}'
+      + 'var pb=body?parseFloat(window.getComputedStyle(body).paddingBottom)||0:0;'
+      + 'var h=Math.ceil(maxB+pb);'
+      + 'if(h<10)h=10;'
       + 'if(h>20000)h=20000;'
       + 'parent.postMessage({__htmlBlock:1,h:h},\'*\');'
       + '}catch(e){}}'
@@ -4675,12 +4967,784 @@ const Notebook = (function() {
     return html;
   }
 
+  // ============================================================
+  // 2026-08-19 笔记图片：IndexedDB 独立存储 + scimg:// 短引用 + 压缩 + 交互
+  // 笔记 mdContent 只保存短引用 ![名称](scimg://img_xxx)，图片 Blob 存
+  // IndexedDB noteImages store（DataLayer v6），避免 base64 撑爆笔记体积。
+  // ============================================================
+  var _imgUrlCache = {};      // id → objectURL（防重复创建/泄漏）
+  var _imgUrlPromises = {};   // id → Promise<objectURL>
+  var _IMG_PH = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  // 2026-08-19 拖拽边界等比缩放：图片四周 8 个手柄（hover 显示，拖拽锁定原图比例）
+  var _IMG_HANDLES_HTML =
+      '<span class="img-resize-handle irh-nw" data-dir="nw"></span>'
+    + '<span class="img-resize-handle irh-n" data-dir="n"></span>'
+    + '<span class="img-resize-handle irh-ne" data-dir="ne"></span>'
+    + '<span class="img-resize-handle irh-e" data-dir="e"></span>'
+    + '<span class="img-resize-handle irh-se" data-dir="se"></span>'
+    + '<span class="img-resize-handle irh-s" data-dir="s"></span>'
+    + '<span class="img-resize-handle irh-sw" data-dir="sw"></span>'
+    + '<span class="img-resize-handle irh-w" data-dir="w"></span>';
+
+
+  function _imgStorePut(id, blob, meta) {
+    if (typeof DataLayer === 'undefined' || !DataLayer.put) return Promise.reject(new Error('DataLayer 不可用'));
+    return DataLayer.put('noteImages', {
+      id: id, blob: blob,
+      name: meta && meta.name ? meta.name : '',
+      mime: meta && meta.mime ? meta.mime : (blob && blob.type || 'image/jpeg'),
+      w: meta && meta.w ? meta.w : 0,
+      h: meta && meta.h ? meta.h : 0,
+      createdAt: Date.now()
+    });
+  }
+  function _imgStoreGet(id) {
+    if (typeof DataLayer === 'undefined' || !DataLayer.get) return Promise.resolve(null);
+    return DataLayer.get('noteImages', id).then(function(r) { return r && r.blob ? r.blob : null; });
+  }
+  function _imgStoreDelete(id) {
+    if (typeof DataLayer === 'undefined' || !DataLayer.delete) return Promise.resolve();
+    if (_imgUrlCache[id]) { try { URL.revokeObjectURL(_imgUrlCache[id]); } catch (e) {} delete _imgUrlCache[id]; }
+    delete _imgUrlPromises[id];
+    return DataLayer.delete('noteImages', id);
+  }
+
+  // 2026-08-19 图片镜像到附件空间（与流程图/HTML 组件一致：附件管理器可查看/复用这份图片）
+  // 幂等：nodeId 固定为 img_<id>，重复写入覆盖同名附件
+  function _imgMirrorToAttachments(id, blob, name) {
+    try {
+      if (!id || !blob) return Promise.resolve(null);
+      if (typeof AttachmentManager === 'undefined' || !AttachmentManager.addSourceBlob) return Promise.resolve(null);
+      var bookId = _resolveBookIdForHtml();
+      if (!bookId) return Promise.resolve(null);
+      var mime = blob.type || 'image/jpeg';
+      var ext = (mime.indexOf('png') >= 0) ? 'png' : (mime.indexOf('gif') >= 0 ? 'gif' : (mime.indexOf('webp') >= 0 ? 'webp' : 'jpg'));
+      var shortId = String(id).slice(-6);
+      return AttachmentManager.addSourceBlob(
+        bookId,
+        '图片_' + shortId + '.' + ext,
+        blob,
+        mime,
+        'img_' + id
+      );
+    } catch (e) { return Promise.resolve(null); }
+  }
+  // 2026-08-19 删除图片时同步移除附件镜像（与其他组件删除行为一致）
+  function _imgUnmirrorFromAttachments(id) {
+    try {
+      if (!id) return;
+      if (typeof AttachmentManager === 'undefined' || !AttachmentManager.removeSourceFile) return;
+      var bookId = _resolveBookIdForHtml();
+      if (!bookId) return;
+      AttachmentManager.removeSourceFile(bookId, 'img_' + id);
+    } catch (e) {}
+  }
+  // 取图片 objectURL（内存缓存）
+  function _imgGetURL(id) {
+    if (!id) return Promise.reject(new Error('缺少图片 id'));
+    if (_imgUrlCache[id]) return Promise.resolve(_imgUrlCache[id]);
+    if (_imgUrlPromises[id]) return _imgUrlPromises[id];
+    _imgUrlPromises[id] = _imgStoreGet(id).then(function(blob) {
+      if (!blob) { delete _imgUrlPromises[id]; throw new Error('图片不存在：' + id); }
+      var url = URL.createObjectURL(blob);
+      _imgUrlCache[id] = url;
+      delete _imgUrlPromises[id];
+      return url;
+    });
+    return _imgUrlPromises[id];
+  }
+
+  // 渲染后置处理：scimg:// 引用 → 可交互图片容器（真实 src 由 _resolvePreviewImages 异步填充；
+  // 加载提示用 CSS ::before，不产生 DOM 文本，避免序列化污染 mdContent）
+  function _postProcessImageRefs(html) {
+    if (!html || html.indexOf('scimg://') < 0) return html;
+    return html.replace(/<img([^>]*)src="scimg:\/\/([A-Za-z0-9_\-]+)"([^>]*)>/g, function(m, pre, id, post) {
+      var am = (pre + post).match(/alt="([^"]*)"/);
+      var alt = am ? am[1] : '';
+      return '<span class="note-img-box" contenteditable="false" data-img-id="' + id + '">'
+        + '<span class="note-img-loading"></span>'
+        + '<span class="note-img-wrap">'
+        + '<img src="' + _IMG_PH + '" data-src="scimg://' + id + '" class="note-img" alt="' + alt + '" loading="lazy">'
+        + _IMG_HANDLES_HTML
+        + '</span>'
+        + '</span>';
+    });
+  }
+
+  // 解析容器内所有笔记图片：异步加载 blob URL + 应用已保存的尺寸/对齐
+  function _resolvePreviewImages(container) {
+    if (!container || !container.querySelector) return Promise.resolve();
+    var boxes = container.querySelectorAll('.note-img-box');
+    if (!boxes.length) return Promise.resolve();
+    var tasks = [];
+    for (var bi = 0; bi < boxes.length; bi++) (function(box) {
+      var id = box.getAttribute('data-img-id');
+      var img = box.querySelector('img.note-img');
+      if (!id || !img) return;
+      tasks.push(_imgGetURL(id).then(function(url) {
+        img.src = url;
+        _applyImageBoxUi(box, id);
+        box.classList.add('img-ready');
+        box.classList.remove('img-fail');
+        // 2026-08-19 渲染出现的图片实时镜像到附件空间（保证所有笔记图片都进入附件）
+        _imgStoreGet(id).then(function(blob) {
+          if (blob) _imgMirrorToAttachments(id, blob, img.getAttribute('alt') || '图片');
+        }).catch(function() {});
+      }).catch(function() {
+        box.classList.add('img-fail');
+      }));
+    })(boxes[bi]);
+    return Promise.all(tasks);
+  }
+
+  // ---- 图片尺寸/对齐持久化（localStorage：shuchongu_imgui_<id>）----
+  function _imgUiGet(id) {
+    try { var s = localStorage.getItem('shuchongu_imgui_' + id); return s ? JSON.parse(s) : null; } catch (e) { return null; }
+  }
+  function _imgUiSet(id, ui) {
+    try { localStorage.setItem('shuchongu_imgui_' + id, JSON.stringify(ui || {})); } catch (e) {}
+  }
+  function _applyImageBoxUi(box, id) {
+    if (!box) return;
+    var ui = _imgUiGet(id);
+    var w = ui && ui.w ? ui.w : 'auto';
+    var align = ui && ui.align ? ui.align : 'center';
+    var img = box.querySelector('img.note-img');
+    var wrap = box.querySelector('.note-img-wrap');
+    box.classList.remove('img-w-auto', 'img-w-25', 'img-w-50', 'img-w-75', 'img-w-100', 'img-w-custom');
+    if (w === 'custom') {
+      // 2026-08-19 拖拽自定义尺寸：宽度按百分比持久化（作用于 box，wrap 100% 填满保持原图比例）
+      box.classList.add('img-w-custom');
+      var pct = (ui && ui.pct) ? ui.pct : 50;
+      box.style.width = Math.max(5, Math.min(100, pct)) + '%';
+    } else {
+      box.style.width = '';
+      box.classList.add('img-w-' + w);
+    }
+    if (img) { img.style.width = ''; img.style.height = ''; }
+    if (wrap) wrap.style.width = '';
+    box.classList.remove('img-align-left', 'img-align-center', 'img-align-right');
+    box.classList.add('img-align-' + align);
+    // 2026-08-19 图文混排：图片独占段落时按对齐设置段落 text-align（box 为 inline-block，
+    // 自身 text-align 无法控制行内对齐；图片行其余区域可正常输入文字）
+    var parent = box.parentElement;
+    if (parent && parent.tagName === 'P') {
+      var onlyImg = Array.prototype.every.call(parent.childNodes, function(n) {
+        return n === box || (n.nodeType === 3 && !n.textContent.trim());
+      });
+      parent.style.textAlign = onlyImg ? align : '';
+    }
+    // 2026-08-19 自由拖拽位置（贴纸式）：位移持久化，重新渲染时恢复；
+    // 移出原位后 box 高度归零（img-freemoved）不占文档流行，原位置可正常输入文字
+    if (wrap) {
+      var mx = (ui && ui.moveX) ? ui.moveX : 0;
+      var my = (ui && ui.moveY) ? ui.moveY : 0;
+      wrap.style.transform = (mx || my) ? ('translate(' + mx + 'px,' + my + 'px)') : '';
+      if (mx || my) box.classList.add('img-freemoved');
+      else box.classList.remove('img-freemoved');
+    }
+  }
+
+  // ---- 压缩图片：长边 maxEdge、质量 quality；返回 { blob, w, h, origW, origH } ----
+  function _compressImage(file, maxEdge, quality) {
+    return new Promise(function(resolve, reject) {
+      if (!file || !file.type || file.type.indexOf('image/') !== 0) {
+        return reject(new Error('非图片文件'));
+      }
+      var url = null;
+      try { url = URL.createObjectURL(file); } catch (e) {}
+      if (!url) return reject(new Error('无法读取图片'));
+      var img = new Image();
+      img.onload = function() {
+        try {
+          var sw = img.naturalWidth || img.width || 0;
+          var sh = img.naturalHeight || img.height || 0;
+          if (!sw || !sh) throw new Error('图片尺寸无效');
+          var scale = 1, m = Math.max(sw, sh);
+          if (m > maxEdge) scale = maxEdge / m;
+          var w = Math.max(1, Math.round(sw * scale));
+          var h = Math.max(1, Math.round(sh * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          // PNG 保留透明与锐利（截图/插图）；其余转 JPEG 压缩
+          var outType = (file.type === 'image/png') ? 'image/png' : 'image/jpeg';
+          canvas.toBlob(function(blob) {
+            if (url) URL.revokeObjectURL(url);
+            if (!blob) return reject(new Error('图片压缩失败'));
+            resolve({ blob: blob, w: w, h: h, origW: sw, origH: sh });
+          }, outType, quality || 0.82);
+        } catch (e) {
+          if (url) URL.revokeObjectURL(url);
+          reject(e);
+        }
+      };
+      img.onerror = function() { if (url) URL.revokeObjectURL(url); reject(new Error('图片解析失败')); };
+      img.src = url;
+    });
+  }
+
+  // ---- 导入图片到当前笔记（支持批量多选 / 粘贴 / 拖拽）----
+  function _importImagesToNote(fileList) {
+    var files = Array.prototype.slice.call(fileList || []).filter(function(f) {
+      return f && f.type && f.type.indexOf('image/') === 0;
+    });
+    if (!files.length) { alert('请选择图片文件（支持 JPG / PNG / GIF / WebP / BMP）'); return; }
+    var done = 0, total = files.length;
+    var snippets = [];   // Markdown 短引用
+    var boxesHtml = [];  // 预览态所见即所得 HTML
+    _imgImportTip(total, 0);
+    files.forEach(function(file) {
+      _compressImage(file, 1600, 0.82).then(function(cp) {
+        var id = 'img_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        var alt = (file.name || 'image').replace(/\.[^.]+$/, '').replace(/[\[\]"\\\n]/g, '') || '图片';
+        return _imgStorePut(id, cp.blob, { name: alt, mime: cp.blob.type || 'image/jpeg', w: cp.w, h: cp.h }).then(function() {
+          // 2026-08-19 导入即实时镜像到附件空间（与其他组件一致）
+          _imgMirrorToAttachments(id, cp.blob, alt);
+          snippets.push('\n![' + alt + '](scimg://' + id + ' "' + alt + '")\n\n');
+          boxesHtml.push('<p><span class="note-img-box" contenteditable="false" data-img-id="' + id + '">'
+            + '<span class="note-img-loading"></span>'
+            + '<span class="note-img-wrap">'
+            + '<img src="' + _IMG_PH + '" data-src="scimg://' + id + '" class="note-img" alt="' + alt + '">'
+            + _IMG_HANDLES_HTML
+            + '</span></span></p>');
+        });
+      }).then(function() {
+        done++;
+        _imgImportTip(total, done);
+        if (done >= total) _finishImagesInsert(snippets, boxesHtml);
+      }).catch(function(err) {
+        done++;
+        console.warn('图片导入失败:', file && file.name, err);
+        _imgImportTip(total, done);
+        if (done >= total) _finishImagesInsert(snippets, boxesHtml);
+      });
+    });
+  }
+
+  // 轻量导入进度提示（不阻塞操作）
+  function _imgImportTip(total, done) {
+    try {
+      var el = document.getElementById('imgImportTip');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'imgImportTip';
+        el.setAttribute('style', 'position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;'
+          + 'background:rgba(43,69,48,.92);color:#fff;padding:8px 18px;border-radius:20px;font-size:13px;'
+          + 'box-shadow:0 6px 24px rgba(0,0,0,.25);transition:opacity .3s;pointer-events:none;');
+        document.body.appendChild(el);
+      }
+      el.style.opacity = '1';
+      el.textContent = done >= total ? '✅ 已插入 ' + total + ' 张图片' : '🖼 正在处理图片 ' + done + '/' + total + ' …';
+      if (done >= total) {
+        setTimeout(function() { el.style.opacity = '0'; setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 320); }, 900);
+      }
+    } catch (e) {}
+  }
+
+  // 把图片真正插入当前编辑面（CM 源码态 / 预览态 / 兜底）
+  function _finishImagesInsert(snippets, boxesHtml) {
+    if (!snippets.length) { alert('没有成功导入任何图片'); return; }
+    var md = snippets.join('\n');
+    var html = boxesHtml.join('\n');
+    // 1) CodeMirror 源码态：直接插入 Markdown 短引用
+    if (typeof mdSubMode !== 'undefined' && mdSubMode === 'edit' && typeof cmView !== 'undefined' && cmView && typeof cmView.dispatch === 'function') {
+      try {
+        var cur = cmView.state.selection.main.head;
+        cmView.dispatch({ changes: { from: cur, insert: md }, selection: { anchor: cur + md.length } });
+        cmView.focus();
+        return;
+      } catch (e) {}
+    }
+    // 2) 预览（contentEditable）态：所见即所得插入图片容器，随后序列化写回 mdContent
+    var preview = _getCurrentEditRoot();
+    if (preview) {
+      try {
+        preview.focus();
+        var sel = window.getSelection();
+        if (!sel || !sel.rangeCount) {
+          var rr = document.createRange();
+          rr.selectNodeContents(preview); rr.collapse(false);
+          if (sel) { sel.removeAllRanges(); sel.addRange(rr); }
+        }
+        document.execCommand('insertHTML', false, html);
+      } catch (e) {
+        try {
+          var r2 = document.createRange();
+          r2.selectNodeContents(preview); r2.collapse(false);
+          var d2 = document.createElement('div'); d2.innerHTML = html;
+          r2.insertNode(d2);
+        } catch (e2) {}
+      }
+      try { _resolvePreviewImages(preview); } catch (e) {}
+      try { preview.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+      return;
+    }
+    // 3) 兜底
+    _insertMdOrHtml(md, html);
+  }
+
+  // ---- 点击图片 → 浮动操作条（尺寸 / 对齐 / 删除）----
+  var _imgActionBar = null;
+  var _imgActionBox = null;
+  function _bindImageInteractions(container) {
+    if (!container || container.__imgBound) return;
+    container.__imgBound = true;
+    container.addEventListener('click', function(e) {
+      var box = e.target && e.target.closest ? e.target.closest('.note-img-box') : null;
+      if (!box) { _hideImgActions(); _clearImgSelection(); return; }
+      // 2026-08-19 点击图片框内空白区域（图片左右两侧）不选中图片：
+      // 交给浏览器默认行为，让光标能定位到图片旁输入文本（图文混排）
+      var t = e.target;
+      var onImg = !!(t && (t.closest ? (t.closest('img.note-img') || t.closest('.note-img-wrap') || t.closest('.img-resize-handle')) : false));
+      if (!onImg) { _hideImgActions(); _clearImgSelection(); return; }
+      e.preventDefault();
+      e.stopPropagation();
+      // 2026-08-19 点击图片 = 选中图片：聚焦编辑区并建立选区，
+      // 使 Backspace/Delete 删除、Ctrl+C/X/V 复制剪切粘贴可直接生效
+      try {
+        if (container.focus) container.focus({ preventScroll: true });
+        var r = document.createRange();
+        r.selectNode(box);
+        var sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); sel.addRange(r); }
+      } catch (e2) {}
+      _markImgSelection(box);
+      _showImgActions(box, e);
+    });
+    // 2026-08-19 键盘快捷键：Backspace/Delete 删除选中图片，Ctrl+C/X/V 复制/剪切/粘贴
+    container.addEventListener('keydown', function(e) { _onImgKeyDown(e); });
+    container.addEventListener('cut', function(e) { _onImgCut(e); });
+    container.addEventListener('copy', function(e) { _onImgCopy(e); });
+    container.addEventListener('paste', function(e) { _onImgPaste(e); });
+    // 2026-08-19 拖拽边界等比缩放（锁定原图比例）
+    _bindImgResizeDrag(container);
+    // 2026-08-19 拖拽图片本体移动位置（横向吸附左/中/右，与手柄缩放互不冲突）
+    _bindImgMoveDrag(container);
+  }
+
+  // 拖拽图片四周手柄：按原图宽高比等比缩放，松手后以百分比持久化
+  function _bindImgResizeDrag(container) {
+    if (!container || container.__imgResizeBound) return;
+    container.__imgResizeBound = true;
+    container.addEventListener('mousedown', function(e) {
+      var h = e.target && e.target.closest ? e.target.closest('.img-resize-handle') : null;
+      if (!h) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var box = h.closest('.note-img-box');
+      var img = box ? box.querySelector('img.note-img') : null;
+      if (!box || !img) return;
+      // 2026-08-19 尺寸统一作用于 wrap：img 始终 100% 填满 wrap + height auto →
+      // 缩放过程中比例自动保持（不再单独设 img 的 width/height，避免与 max-width 冲突导致比例异常）
+      var wrap = box.querySelector('.note-img-wrap') || img;
+      var dir = h.getAttribute('data-dir') || 'se';
+      // 原图宽高比（默认比例不可变化）
+      var nw = img.naturalWidth || 0, nh = img.naturalHeight || 0;
+      if (!nw || !nh) { nw = img.width || 1; nh = img.height || 1; }
+      var ratio = nw / nh;
+      var rect = wrap.getBoundingClientRect();
+      var startW = rect.width || 100;
+      var startX = e.clientX, startY = e.clientY;
+      // 2026-08-19 box 为 inline-block（宽度=内容），缩放上限与百分比改以父级段落宽度为基准
+      var hostW = box.parentElement ? box.parentElement.clientWidth : (box.clientWidth || 600);
+      var maxW = Math.max(40, hostW);
+      var lastW = startW;
+      function move(ev) {
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        var dw = 0, dh = 0;
+        if (dir.indexOf('e') >= 0) dw += dx;
+        if (dir.indexOf('w') >= 0) dw -= dx;
+        if (dir.indexOf('s') >= 0) dh += dy;
+        if (dir.indexOf('n') >= 0) dh -= dy;
+        var d = (Math.abs(dw) >= Math.abs(dh)) ? dw : dh;
+        var newW = Math.max(40, Math.min(maxW, startW + d));
+        lastW = newW;
+        wrap.style.width = Math.round(newW) + 'px';
+        if (img && wrap !== img) { img.style.width = ''; img.style.height = ''; }
+      }
+      function up() {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        var id = box.getAttribute('data-img-id');
+        if (id) {
+          // 用拖拽最终宽度计算百分比（lastW，相对父级段落宽度），避免布局时序导致读回旧值
+          var pct = Math.round(lastW / (hostW || 1) * 100);
+          pct = Math.max(5, Math.min(100, pct));
+          var u = _imgUiGet(id) || {};
+          u.w = 'custom';
+          u.pct = pct;
+          _imgUiSet(id, u);
+        }
+        // 换算回百分比 + height auto，保证重渲染一致且始终锁定比例
+        _applyImageBoxUi(box, id);
+      }
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  }
+  function _showImgActions(box, ev) {
+    _imgActionBox = box;
+    if (!_imgActionBar) {
+      _imgActionBar = document.createElement('div');
+      _imgActionBar.id = 'noteImgActions';
+      _imgActionBar.setAttribute('style',
+        'position:fixed;z-index:99999;display:flex;gap:4px;align-items:center;padding:6px 8px;'
+        + 'background:#fff;border:1px solid rgba(43,69,48,.25);border-radius:10px;'
+        + 'box-shadow:0 10px 30px rgba(0,0,0,.22);font-size:12px;user-select:none;');
+      _imgActionBar.innerHTML =
+        '<span style="color:#6b5d45;font-weight:600;margin-right:4px;">尺寸</span>'
+        + '<button type="button" data-w="auto">自适应</button>'
+        + '<button type="button" data-w="25">25%</button>'
+        + '<button type="button" data-w="50">50%</button>'
+        + '<button type="button" data-w="75">75%</button>'
+        + '<button type="button" data-w="100">100%</button>'
+        + '<span style="width:1px;height:18px;background:#ddd;margin:0 4px;"></span>'
+        + '<button type="button" data-align="left">左对齐</button>'
+        + '<button type="button" data-align="center">居中</button>'
+        + '<button type="button" data-align="right">右对齐</button>'
+        + '<span style="width:1px;height:18px;background:#ddd;margin:0 4px;"></span>'
+        + '<button type="button" class="del" data-act="delete">🗑 删除</button>';
+      // 2026-08-19：点击操作条按钮不夺焦 → 避免预览 blur 触发重渲染把 box 换成新 DOM，
+      // 否则 _imgActionBox 变成失效引用导致删除/尺寸/对齐按钮无效
+      _imgActionBar.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      _imgActionBar.addEventListener('click', function(e) {
+        var b = e.target;
+        if (!b || b.tagName !== 'BUTTON') return;
+        e.preventDefault(); e.stopPropagation();
+        // 按 id 在当前 DOM 重新定位 box（兜底：blur 重渲染后旧引用失效）
+        var box = _imgActionBox;
+        if (box && !box.parentNode) {
+          var pid = box.getAttribute('data-img-id');
+          box = pid ? document.querySelector('.note-img-box[data-img-id="' + pid + '"]') : null;
+        }
+        if (!box) return;
+        var id = box.getAttribute('data-img-id');
+        if (b.getAttribute('data-act') === 'delete') {
+          _removeImgBox(box);
+        } else if (b.hasAttribute('data-w')) {
+          var u1 = _imgUiGet(id) || {};
+          u1.w = b.getAttribute('data-w');
+          _imgUiSet(id, u1);
+          _applyImageBoxUi(box, id);
+        } else if (b.hasAttribute('data-align')) {
+          var u2 = _imgUiGet(id) || {};
+          u2.align = b.getAttribute('data-align');
+          delete u2.moveX; delete u2.moveY;  // 2026-08-19 选择对齐时复位自由位移
+          _imgUiSet(id, u2);
+          _applyImageBoxUi(box, id);
+        }
+      });
+      document.body.appendChild(_imgActionBar);
+    }
+    _imgActionBar.style.display = 'flex';
+    var r = box.getBoundingClientRect();
+    var bw = _imgActionBar.offsetWidth || 360;
+    var left = Math.max(8, Math.min(window.innerWidth - bw - 8, r.left + r.width / 2 - bw / 2));
+    var top = r.top - 48;
+    if (top < 8) top = r.bottom + 10;
+    _imgActionBar.style.left = left + 'px';
+    _imgActionBar.style.top = top + 'px';
+  }
+  function _hideImgActions() {
+    if (_imgActionBar) _imgActionBar.style.display = 'none';
+    _imgActionBox = null;
+  }
+  function _removeImgBox(box) {
+    _hideImgActions();
+    _clearImgSelection();
+    if (!box || !box.parentNode) return;
+    var preview = box.closest('.md-preview[contenteditable="true"]');
+    var parent = box.parentNode;
+    parent.removeChild(box);
+    // 若父元素变成空段落，一并清理
+    if (parent && parent.tagName === 'P' && !parent.textContent.trim() && !parent.querySelector('img')) {
+      parent.remove();
+    }
+    // 触发序列化 → mdContent 移除该图片引用（Blob 保留，避免其它页面/历史引用失效）
+    if (preview) { try { preview.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {} }
+    // 2026-08-19 同步移除附件镜像（与其他组件删除行为一致；若其它笔记仍引用，重新渲染会再次镜像）
+    var rid = box.getAttribute('data-img-id');
+    if (rid) _imgUnmirrorFromAttachments(rid);
+  }
+
+  // 选中高亮标记：点击图片时标记，供 Backspace/Ctrl+C/X 识别当前操作对象
+  function _markImgSelection(box) {
+    try {
+      var all = document.querySelectorAll('.note-img-box');
+      for (var i = 0; i < all.length; i++) all[i].classList.remove('img-selected');
+      if (box) box.classList.add('img-selected');
+    } catch (e) {}
+  }
+  function _clearImgSelection() {
+    try {
+      var all = document.querySelectorAll('.note-img-box');
+      for (var i = 0; i < all.length; i++) all[i].classList.remove('img-selected');
+    } catch (e) {}
+  }
+
+  // 返回选区中"被选中/接触"的图片容器（去重）
+  function _getSelectedImgBoxes() {
+    var sel = window.getSelection();
+    var boxes = [];
+    if (sel && sel.rangeCount) {
+      for (var ri = 0; ri < sel.rangeCount; ri++) {
+        var r = sel.getRangeAt(ri);
+        var c = r.commonAncestorContainer;
+        var scopeEl = c && c.nodeType === 1 ? c : (c && c.parentElement);
+        var scope = scopeEl ? (scopeEl.closest ? (scopeEl.closest('.md-preview') || scopeEl.closest('.note-img-box') || document) : document) : document;
+        var list = scope.querySelectorAll ? scope.querySelectorAll('.note-img-box') : [];
+        for (var j = 0; j < list.length; j++) {
+          var box = list[j];
+          if (r.intersectsNode ? r.intersectsNode(box) : scope.contains(box)) {
+            if (boxes.indexOf(box) < 0) boxes.push(box);
+          }
+        }
+      }
+    }
+    // 兜底：选区未命中时，采用点击选中标记的图片（img-selected）
+    if (!boxes.length) {
+      var marked = document.querySelectorAll('.note-img-box.img-selected');
+      for (var k = 0; k < marked.length; k++) boxes.push(marked[k]);
+    }
+    return boxes;
+  }
+
+  // Backspace / Delete：删除选中的图片容器
+  function _onImgKeyDown(e) {
+    if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+    var boxes = _getSelectedImgBoxes();
+    if (!boxes.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    for (var i = 0; i < boxes.length; i++) _removeImgBox(boxes[i]);
+  }
+
+  // Ctrl+X：复制（Markdown 引用 + HTML）并删除选中图片
+  function _onImgCut(e) {
+    var boxes = _getSelectedImgBoxes();
+    if (!boxes.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _copyImgBoxesToClipboard(e, boxes);
+    for (var i = 0; i < boxes.length; i++) _removeImgBox(boxes[i]);
+  }
+
+  // Ctrl+C：把选中的图片以 Markdown 引用复制（同时保留 HTML，便于内部粘贴还原）
+  function _onImgCopy(e) {
+    var boxes = _getSelectedImgBoxes();
+    if (!boxes.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _copyImgBoxesToClipboard(e, boxes);
+  }
+
+  function _copyImgBoxesToClipboard(e, boxes) {
+    var md = [], html = [];
+    for (var i = 0; i < boxes.length; i++) {
+      var img = boxes[i].querySelector('img.note-img');
+      var alt = img ? (img.getAttribute('alt') || '图片') : '图片';
+      var ref = img ? (img.getAttribute('data-src') || img.src || '') : '';
+      md.push('![' + alt + '](' + ref + ')');
+      html.push(boxes[i].outerHTML);
+    }
+    if (e.clipboardData) {
+      try { e.clipboardData.setData('text/plain', md.join('\n')); } catch (er) {}
+      try { e.clipboardData.setData('text/html', html.join('')); } catch (er) {}
+    }
+  }
+
+  // Ctrl+V：解析剪贴板中的 scimg:// 引用（Markdown 或 HTML）并插入为图片容器
+  function _onImgPaste(e) {
+    var cd = e.clipboardData;
+    if (!cd) return;
+    var html = cd.getData('text/html') || '';
+    var text = cd.getData('text/plain') || '';
+    var src = html + '\n' + text;
+    if (src.indexOf('scimg://') < 0) return;  // 普通内容走默认粘贴
+    e.preventDefault();
+    e.stopPropagation();
+    var ids = [];
+    var re = /scimg:\/\/([A-Za-z0-9_\-]+)/g, m;
+    while ((m = re.exec(src)) !== null) { if (ids.indexOf(m[1]) < 0) ids.push(m[1]); }
+    if (!ids.length) return;
+    var mdSnippet = [];
+    for (var i = 0; i < ids.length; i++) mdSnippet.push('![' + '图片' + '](scimg://' + ids[i] + ')');
+    var rendered = renderMarkdown(mdSnippet.join('\n\n'));
+    if (rendered && rendered.indexOf('<') >= 0) {
+      _insertMdOrHtml('', rendered);
+      var preview = _getCurrentEditRoot();
+      if (preview) {
+        try { _resolvePreviewImages(preview); } catch (e2) {}
+        try { preview.dispatchEvent(new Event('input', { bubbles: true })); } catch (e3) {}
+      }
+    }
+  }
+
+  // 拖拽图片本体 → 移动位置：横向跟随，松手按位置吸附 左/中/右 对齐（与手柄缩放互不冲突）
+  function _bindImgMoveDrag(container) {
+    if (!container || container.__imgMoveBound) return;
+    container.__imgMoveBound = true;
+    container.addEventListener('mousedown', function(e) {
+      var img = e.target && e.target.closest ? e.target.closest('img.note-img') : null;
+      if (!img) return;
+      var box = img.closest('.note-img-box');
+      if (!box || box.__imgMoving) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // 2026-08-19 自由拖拽（贴纸式）：上下左右都能移动，位移作用于 wrap 并持久化；
+      // 拖拽前先读取已保存位移作为起点，支持多次连续移动
+      var wrap = box.querySelector('.note-img-wrap') || img;
+      var id = box.getAttribute('data-img-id');
+      var ui0 = _imgUiGet(id) || {};
+      var baseX = ui0.moveX || 0, baseY = ui0.moveY || 0;
+      var startX = e.clientX, startY = e.clientY;
+      var moved = false;
+      box.__imgMoving = true;
+      function move(ev) {
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        wrap.style.transition = 'none';
+        wrap.style.transform = 'translate(' + (baseX + dx) + 'px,' + (baseY + dy) + 'px)';
+        if (wrap.style.cursor !== 'grabbing') wrap.style.cursor = 'grabbing';
+      }
+      function up(ev) {
+        var finalDx = ev.clientX - startX, finalDy = ev.clientY - startY;
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        box.__imgMoving = false;
+        wrap.style.cursor = '';
+        if (!moved) return;  // 未拖动视为点击 → 交给 click 显示操作条
+        var mx = Math.round(baseX + finalDx), my = Math.round(baseY + finalDy);
+        var u = _imgUiGet(id) || {};
+        if (mx || my) {
+          u.moveX = mx;
+          u.moveY = my;
+          box.classList.add('img-freemoved');  // 2026-08-19 移出原位：box 高度归零不占行，原位置可输入文字
+        } else {
+          delete u.moveX; delete u.moveY;  // 2026-08-19 拖回原位：恢复文档流占位
+          box.classList.remove('img-freemoved');
+        }
+        delete u.align;  // 自由摆放后不再受水平对齐约束
+        _imgUiSet(id, u);
+        // 2026-08-19 只应用位移与对齐类，避免重置已保存的宽度类（custom 百分比）
+        wrap.style.transform = 'translate(' + mx + 'px,' + my + 'px)';
+        box.classList.remove('img-align-left', 'img-align-center', 'img-align-right');
+        box.classList.add('img-align-' + (u.align || 'center'));
+      }
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  }
+
+  // ---- 全局：粘贴图片 / 拖拽图片 ----
+  var _imgGlobalBound = false;
+  function _bindGlobalImageHandlers() {
+    if (_imgGlobalBound) return;
+    _imgGlobalBound = true;
+    // 粘贴：剪贴板含图片且当前处于笔记编辑面
+    document.addEventListener('paste', function(e) {
+      var cd = e.clipboardData || window.clipboardData;
+      if (!cd || !cd.files) return;
+      var hasImg = false;
+      for (var pi = 0; pi < cd.files.length; pi++) {
+        if (cd.files[pi] && cd.files[pi].type && cd.files[pi].type.indexOf('image/') === 0) { hasImg = true; break; }
+      }
+      if (!hasImg) return;
+      var root = _getCurrentEditRoot();
+      var active = document.activeElement;
+      var inEdit = active && active.closest && (active.closest('.md-preview[contenteditable="true"]') || active.closest('.note-block-content[contenteditable="true"]'));
+      if (!root || (!inEdit && !(root.contains && root.contains(active)))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _importImagesToNote(cd.files);
+    }, true);
+    // 拖拽：图片文件拖入页面（有笔记编辑面时）
+    document.addEventListener('dragover', function(e) {
+      if (!_getCurrentEditRoot()) return;
+      var dt = e.dataTransfer;
+      if (!dt || !dt.types) return;
+      var hasFiles = false;
+      for (var t = 0; t < dt.types.length; t++) {
+        if (String(dt.types[t]).toLowerCase() === 'files') { hasFiles = true; break; }
+      }
+      if (!hasFiles) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        var dv = document.getElementById('imgDropVeil');
+        if (!dv) {
+          dv = document.createElement('div');
+          dv.id = 'imgDropVeil';
+          dv.setAttribute('style', 'position:fixed;inset:0;z-index:99998;pointer-events:none;'
+            + 'background:rgba(58,90,64,.18);display:none;align-items:center;justify-content:center;'
+            + 'border:3px dashed rgba(58,90,64,.6);color:#2b4530;font-size:18px;font-weight:600;');
+          dv.textContent = '松开以插入图片';
+          document.body.appendChild(dv);
+        }
+        dv.style.display = 'flex';
+      } catch (e) {}
+    });
+    document.addEventListener('dragleave', function(e) {
+      if (!e.relatedTarget) {
+        var dv = document.getElementById('imgDropVeil');
+        if (dv) dv.style.display = 'none';
+      }
+    });
+    document.addEventListener('drop', function(e) {
+      var dv = document.getElementById('imgDropVeil');
+      if (dv) dv.style.display = 'none';
+      if (!e.dataTransfer || !e.dataTransfer.files) return;
+      if (!_getCurrentEditRoot()) return;
+      var hasImg = false;
+      for (var di = 0; di < e.dataTransfer.files.length; di++) {
+        if (e.dataTransfer.files[di] && e.dataTransfer.files[di].type && e.dataTransfer.files[di].type.indexOf('image/') === 0) { hasImg = true; break; }
+      }
+      if (!hasImg) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _importImagesToNote(e.dataTransfer.files);
+    });
+    // 全局点击隐藏操作条
+    document.addEventListener('click', function(e) {
+      if (_imgActionBar && e.target && !e.target.closest('#noteImgActions') && !e.target.closest('.note-img-box')) {
+        _hideImgActions();
+      }
+    });
+  }
+
   // ---------- 流程图存储（localStorage 简单方案）----------
   function saveDiagram(diagramId, data) {
     try {
       localStorage.setItem('shuchongu_diagram_' + diagramId, JSON.stringify(data || { nodes: [], edges: [] }));
+      // 2026-08-18：同步镜像到附件（与 HTML 组件一致），附件管理器可查看/复用这份图数据
+      _ensureDiagramAttachment(diagramId, data || { nodes: [], edges: [] });
       return true;
     } catch (e) { return false; }
+  }
+  // 把流程图数据镜像到当前教材的附件（幂等：按 diagramId 覆盖同名文件，保存为 canvas-diagram JSON）
+  function _ensureDiagramAttachment(diagramId, data) {
+    try {
+      if (!diagramId || data == null) return;
+      if (typeof AttachmentManager === 'undefined' || !AttachmentManager.addSourceFile) return;
+      var bookId = _resolveBookIdForHtml(); // 复用同一本书判定
+      if (!bookId) return;
+      var shortId = String(diagramId).slice(-6);
+      var text = JSON.stringify(data || { nodes: [], edges: [] }, null, 2);
+      AttachmentManager.addSourceFile(
+        bookId,
+        '流程图_' + shortId + '.json',
+        text,
+        'application/json',
+        'diagram_' + diagramId
+      );
+    } catch (e) {}
   }
   function loadDiagram(diagramId) {
     try {
@@ -4695,6 +5759,13 @@ const Notebook = (function() {
   }
   function _deleteDiagram(diagramId) {
     try { localStorage.removeItem('shuchongu_diagram_' + diagramId); } catch (e) {}
+    // 2026-08-18：同步删除附件镜像，避免孤儿文件残留
+    try {
+      if (diagramId && typeof AttachmentManager !== 'undefined' && AttachmentManager.removeSourceFile) {
+        var bookId = _resolveBookIdForHtml();
+        if (bookId) AttachmentManager.removeSourceFile(bookId, 'diagram_' + diagramId);
+      }
+    } catch (e) {}
   }
   function _generateDiagramId() {
     return 'd_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
@@ -4899,6 +5970,51 @@ const Notebook = (function() {
     }
   }
 
+  // ---------- 附件编辑同步：笔记预览中同 id 流程图刷新 ----------
+  // 附件空间保存流程图后，若当前预览包含同 diagramId 的块，重建该块（读取 localStorage 最新数据）
+  function _refreshDiagramAfterAttachEdit(diagramId) {
+    try {
+      var preview = contentEl ? contentEl.querySelector('.md-preview[contenteditable="true"]') : null;
+      if (!preview) return;
+      var block = preview.querySelector('.diagram-block[data-diagram-id="' + diagramId + '"]');
+      if (!block) return;
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          try {
+            // 移除旧 canvas 与工具栏，重建 DiagramEditor（自动读取最新 localStorage 数据）
+            var oldWrap = block.querySelector('.diagram-canvas-wrap');
+            if (oldWrap && oldWrap.parentNode) oldWrap.parentNode.removeChild(oldWrap);
+            var oldTb = block.querySelector(':scope > .diagram-toolbar');
+            if (oldTb) oldTb.remove();
+            // 若块是浮动定位，重建后恢复浮动样式
+            var wasFloat = block.classList.contains('is-floating');
+            var fl = block.style.left, ft = block.style.top;
+            var editor = new DiagramEditor(block);
+            if (wasFloat) {
+              block.classList.add('is-floating');
+              block.style.position = 'absolute';
+              if (fl) block.style.left = fl;
+              if (ft) block.style.top = ft;
+            }
+            // 2026-08-19 修复：附件面板覆盖时块可能处于隐藏状态，重建得到的尺寸为 0/不准。
+            // 轮询等待块可见后重新测量渲染，确保返回笔记时正常显示。
+            var tries = 0;
+            var timer = setInterval(function() {
+              tries++;
+              try {
+                var w = block.clientWidth || block.offsetWidth;
+                if ((w && w > 30) || tries >= 10) {
+                  clearInterval(timer);
+                  if (editor) { editor.handleResize(); editor.render(); }
+                }
+              } catch (e) { clearInterval(timer); }
+            }, 120);
+          } catch (e) {}
+        });
+      });
+    } catch (e) {}
+  }
+
   // ---------- 流程图/HTML块：AI 改进 + 删除按钮绑定 ----------
   function _initBlockActionButtons(container, page) {
     if (!container) return;
@@ -4974,9 +6090,10 @@ const Notebook = (function() {
             return;
           }
           try {
-            var delimiters = (CommandQueue && CommandQueue.getDelimiters) ? CommandQueue.getDelimiters() : { open: '、、', close: '。。' };
-            var open = (delimiters && delimiters.open) || '、、';
-            var close = (delimiters && delimiters.close) || '。。';
+            var delimiters = (CommandQueue && CommandQueue.getDelimiters) ? CommandQueue.getDelimiters() : { open: ['、、'], close: ['。。'] };
+            // 2026-08-18 修复：delimiters.open/close 现在是数组，取第一个符号拼接指令文本
+            var open = (Array.isArray(delimiters.open) && delimiters.open.length) ? delimiters.open[0] : '、、';
+            var close = (Array.isArray(delimiters.close) && delimiters.close.length) ? delimiters.close[0] : '。。';
             var cmdText = open + '改进' + blockType + '：用户需求=\"' + aiPrompt + '\"；现有' + blockType + '如下：\n\n'
               + (blockType === 'HTML' ? '```html\n' : '```json\n')
               + blockData + '\n```\n\n请在当前笔记页的同一位置替换为改进后的' + blockType + close;
@@ -5206,6 +6323,24 @@ const Notebook = (function() {
       }
     }
     // Block 预览模式：插入 HTML（如果有），或插入纯文本
+    // 2026-08-19 修复：点击工具栏按钮会令编辑区失焦/选区丢失 → execCommand 静默失败
+    // （图片/表格等插入无效果）。插入前先聚焦并恢复选区。
+    var edRoot = _getCurrentEditRoot();
+    if (edRoot) {
+      try {
+        edRoot.focus();
+        var _sel = window.getSelection();
+        if (_sel && (!_sel.rangeCount || !edRoot.contains(_sel.anchorNode))) {
+          var _r = document.createRange();
+          _r.selectNodeContents(edRoot); _r.collapse(false);
+          _sel.removeAllRanges(); _sel.addRange(_r);
+        }
+        if (htmlIfEmpty) document.execCommand('insertHTML', false, htmlIfEmpty);
+        else document.execCommand('insertText', false, mdSnippet);
+        edRoot.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      } catch (e2) {}
+    }
     try {
       if (htmlIfEmpty) document.execCommand('insertHTML', false, htmlIfEmpty);
       else document.execCommand('insertText', false, mdSnippet);
@@ -5315,8 +6450,11 @@ const Notebook = (function() {
       if (!req || !req.trim()) return;
       if (typeof CommandQueue === 'undefined' || !CommandQueue.enqueue) { alert('AI 指令队列未加载'); return; }
       try {
-        var delim = (CommandQueue.getDelimiters && CommandQueue.getDelimiters()) || { open: '、、', close: '。。' };
-        var cmdText = delim.open + '生成图表：' + req.trim() + '。请插入 HTML/ECharts 代码到当前笔记页的光标位置。' + delim.close;
+        var delim = (CommandQueue.getDelimiters && CommandQueue.getDelimiters()) || { open: ['、、'], close: ['。。'] };
+        // 2026-08-18 修复：delim.open/close 现在是数组，需取第一个符号拼接指令文本（避免数组 toString 产生乱码）
+        var openMark = (Array.isArray(delim.open) && delim.open.length) ? delim.open[0] : '、、';
+        var closeMark = (Array.isArray(delim.close) && delim.close.length) ? delim.close[0] : '。。';
+        var cmdText = openMark + '生成图表：' + req.trim() + '。请插入 HTML/ECharts 代码到当前笔记页的光标位置。' + closeMark;
         var page = getCurrentPage();
         CommandQueue.enqueue({
           id: 'cmd_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
@@ -5328,25 +6466,24 @@ const Notebook = (function() {
       } catch (e) { alert('任务创建失败：' + e.message); }
     });
 
-    // 插入：图片
+    // 插入：图片（2026-08-19 完善：支持多选批量、压缩、IndexedDB 独立存储、
+    // 粘贴/拖拽导入；插入后点击图片可调大小/对齐/删除）
     var iBtn = document.querySelector('.ht-btn.ht-image');
     var iFile = document.getElementById('htImageFile');
-    if (iBtn) iBtn.addEventListener('click', function() {
-      if (iFile) { iFile.value = ''; iFile.click(); }
-    });
+    if (iFile) {
+      iFile.multiple = true;
+      iFile.setAttribute('accept', 'image/*');
+    }
+    if (iBtn) {
+      iBtn.setAttribute('title', '插入图片（可多选；也支持 Ctrl+V 粘贴 / 拖拽图片）');
+      iBtn.addEventListener('click', function() {
+        if (iFile) { iFile.value = ''; iFile.click(); }
+      });
+    }
     if (iFile) iFile.addEventListener('change', function() {
-      var f = this.files && this.files[0];
-      if (!f) return;
-      var fr = new FileReader();
-      fr.onload = function() {
-        var dataUrl = String(fr.result || '');
-        var name = f.name || 'image';
-        var alt = name.replace(/\.[^.]+$/, '');
-        var md = '\n![alt](' + dataUrl + ' "' + alt + '")\n\n';
-        var html = '<img src="' + dataUrl + '" alt="' + alt + '" style="max-width:100%;border-radius:6px;margin:6px 0;">';
-        _insertMdOrHtml(md, html);
-      };
-      fr.readAsDataURL(f);
+      var files = this.files;
+      this.value = '';
+      if (files && files.length) _importImagesToNote(files);
     });
 
     // 插入：链接
@@ -5420,13 +6557,17 @@ const Notebook = (function() {
     if (!ui) return;
     var style = blockEl.style;
     // 第一步：先加 floating class（并设 position:absolute），让块脱离文档流 → 后续 left/top 基准稳定
-    if (ui.floating) {
+    // 2026-08-18 修复：缺少数字型 x/y 坐标的"浮动"不生效（保持流式）——
+    // 旧版本/异常数据可能在无坐标时把块定位到 0,0，导致多个块叠在左上角。
+    if (ui.floating && typeof ui.x === 'number' && typeof ui.y === 'number') {
       blockEl.classList.add('is-floating');
       style.position = 'absolute';
-      if (typeof ui.x === 'number') style.left = ui.x + 'px';
-      else style.left = style.left || '0px';
-      if (typeof ui.y === 'number') style.top = ui.y + 'px';
-      else style.top = style.top || '0px';
+      style.left = ui.x + 'px';
+      style.top = ui.y + 'px';
+    } else if (ui.floating) {
+      // 数据不完整：忽略浮动，按源码顺序流式排布（保证"刚生成/恢复"不叠放）
+      blockEl.classList.remove('is-floating');
+      style.position = 'relative';
     }
     // 第二步：宽度（w：展示框宽，viewScale：内容等比缩放 — P1-11 预留字段）
     var iframe = blockEl.querySelector('.html-iframe');
@@ -5438,7 +6579,17 @@ const Notebook = (function() {
     }
     if (typeof ui.h === 'number' && ui.h > 40) {
       if (iframe) iframe.style.height = ui.h + 'px';
-      else if (canvas) canvas.style.height = ui.h + 'px';
+      else if (canvas) {
+        // 2026-08-19 修复：流程图块高度恢复为「块总高」（含工具栏），
+        // canvas 实际高度由 handleResize 按「块高 - 工具栏高」填满，避免高度错乱
+        style.height = ui.h + 'px';
+        try {
+          var eds2 = _diagramEditors || [];
+          for (var ie2 = 0; ie2 < eds2.length; ie2++) {
+            if (eds2[ie2].blockEl === blockEl) { eds2[ie2].handleResize(); break; }
+          }
+        } catch (e11) {}
+      }
       else style.height = ui.h + 'px';
     }
     // 第三步：等比缩放内容（P1-11 预留 — viewScale 默认 1；HTML/流程图都适用）
@@ -5545,6 +6696,17 @@ const Notebook = (function() {
         var b = modeBtns[mi];
         b.classList.toggle('active', b.classList.contains('mode-' + mode));
       }
+      // 2026-08-19 改良：调整形状模式 → 显示拖拽手柄 + canvas 内缩让出边缘热区
+      blockEl.classList.toggle('block-resize-mode', mode === 'resize');
+      if (typeof updateHandles === 'function') updateHandles();
+      if (kind === 'diagram') {
+        try {
+          var eds = _diagramEditors || [];
+          for (var ei = 0; ei < eds.length; ei++) {
+            if (eds[ei].blockEl === blockEl) { eds[ei].handleResize(); }
+          }
+        } catch (e9) {}
+      }
       var u = _loadBlockUi(key) || {};
       u.interactMode = mode;
       _saveBlockUi(key, u);
@@ -5565,41 +6727,66 @@ const Notebook = (function() {
       if (savedUi && savedUi.interactMode) setMode(savedUi.interactMode);
     } catch(e) {}
 
-    // ---- 边界检测拖动法：仅在 resize 模式下可调整大小 ----
-    var EDGE = 16;
+    // ---- 调整形状（改良 2026-08-19）：可视化拖拽手柄 + 扩大边缘热区 ----
+    // 此前仅靠块边缘 16px 热区触发，而 canvas 几乎铺满整个块 → 边缘几乎无法命中。
+    // 现在：resize 模式下块四周显示 8 个拖拽手柄（四角 + 四边），点击即可调整形状；
+    // 同时边缘热区扩大到 24px，且 canvasWrap 内缩让出边缘，直接拖边缘也可触发。
+    var EDGE = 24;
     var iframe2 = blockEl.querySelector('.html-iframe');
     var canvas2 = blockEl.querySelector('.diagram-canvas');
     blockEl.style.position = blockEl.style.position || 'relative';
-    blockEl.addEventListener('mousedown', function(e) {
-      if (e.target.closest && (
-          e.target.closest('.block-action-bar') ||
-          e.target.closest('.block-btn') ||
-          e.target.closest('.block-mode-toggle') ||
-          e.target.closest('.mode-btn') ||
-          e.target.closest('.block-drag-handle') ||
-          e.target.closest('.block-name-row') ||
-          e.target.closest('.html-iframe') ||
-          e.target.closest('.diagram-canvas')
-        )) return;
-      // 拖动模式：点击内部直接触发移动
-      if (modeState === 'drag') {
-        startDrag(e);
-        return;
+
+    // 可视化拖拽手柄（仅流程图块；drag 模式隐藏，resize 模式显示）
+    var resizeHandles = [];
+    if (kind === 'diagram') {
+      var dirs = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+      for (var hi = 0; hi < dirs.length; hi++) {
+        (function(dir) {
+          var h = document.createElement('div');
+          h.className = 'block-resize-handle brh-' + dir;
+          h.setAttribute('data-dir', dir);
+          h.setAttribute('title', '拖拽调整形状');
+          h.style.display = 'none';
+          blockEl.appendChild(h);
+          h.addEventListener('mousedown', function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (modeState !== 'resize') return;
+            beginResize(dir, ev);
+          });
+          resizeHandles.push(h);
+        })(dirs[hi]);
       }
-      // 调整形状模式：检测边界
+    }
+    function updateHandles() {
+      var list = resizeHandles || [];
+      var show = (modeState === 'resize') && (kind === 'diagram');
+      for (var ui = 0; ui < list.length; ui++) {
+        list[ui].style.display = show ? 'block' : 'none';
+      }
+    }
+    // 边缘命中检测：返回 n/w/e/s 组合（如 nw、se、e…）
+    function detectResizeDir(ev) {
       var rect = blockEl.getBoundingClientRect();
-      var x = e.clientX - rect.left;
-      var y = e.clientY - rect.top;
+      var x = ev.clientX - rect.left;
+      var y = ev.clientY - rect.top;
       var w = rect.width, h = rect.height;
       var dir = '';
       if (x < EDGE) dir += 'w';
       else if (x > w - EDGE) dir += 'e';
       if (y < EDGE) dir += 'n';
       else if (y > h - EDGE) dir += 's';
+      return dir;
+    }
+    // 开始调整形状（dir 为 n/w/e/s 组合；可由手柄或边缘热区触发）
+    function beginResize(dir, ev) {
       if (!dir) return;
-      e.preventDefault();
-      e.stopPropagation();
-      blockEl.classList.add('dragging-block', 'html-resizing');
+      ev.preventDefault();
+      ev.stopPropagation();
+      blockEl.classList.add('html-resizing');
+      // 2026-08-19 修复：流程图块拖动调整时不加 dragging-block（opacity .85 + z-index 9999
+      // 会半透明浮起，视觉上像空白蒙版盖住流程图）；该效果仅 HTML 块需要
+      if (kind === 'html') blockEl.classList.add('dragging-block');
       // 2026-08-17：拖拽期间把 iframe 固定为当前尺寸（不随块变化、不重排内容），
       // 先专心调整块的形状/长宽；松手后再恢复内容自适应 —— 消除拖拽卡顿
       if (iframe2) {
@@ -5611,8 +6798,9 @@ const Notebook = (function() {
           }
         } catch (e) {}
       }
-      var startX = e.clientX, startY = e.clientY;
-      var startW = w, startH = h;
+      var rect = blockEl.getBoundingClientRect();
+      var startX = ev.clientX, startY = ev.clientY;
+      var startW = rect.width, startH = rect.height;
       var startLeft = 0, startTop = 0;
       if (blockEl.style.position === 'absolute') {
         startLeft = parseFloat(blockEl.style.left) || 0;
@@ -5625,11 +6813,11 @@ const Notebook = (function() {
         blockEl.style.width = pending.w + 'px';
         if (dir.indexOf('w') >= 0) blockEl.style.left = pending.left + 'px';
         if (dir.indexOf('n') >= 0) blockEl.style.top  = pending.top  + 'px';
-        // 拖拽期间 iframe 已固定（mousedown 时冻结），不随块实时重排内容；
-        // 块宽高随拖拽实时变化（形状预览），松手（up）后 iframe 恢复自适应填满
         if (canvas2) {
-          canvas2.style.width = pending.w + 'px';
-          canvas2.style.height = pending.h + 'px';
+          // 2026-08-19 修复：块总高跟随拖拽（含工具栏），canvas 由 handleResize
+          // 按「块高 - 工具栏高」填满 —— 此前只设 canvas 高会被 handleResize 重置为 400，
+          // 导致下边界拖动无效 + 高度区域留白
+          blockEl.style.height = pending.h + 'px';
           try {
             var editors = _diagramEditors || [];
             for (var i = 0; i < editors.length; i++)
@@ -5691,7 +6879,29 @@ const Notebook = (function() {
       }
       document.addEventListener('mousemove', move);
       document.addEventListener('mouseup', up);
-      });
+    }
+    blockEl.addEventListener('mousedown', function(e) {
+      if (e.target.closest && (
+          e.target.closest('.block-action-bar') ||
+          e.target.closest('.block-btn') ||
+          e.target.closest('.block-mode-toggle') ||
+          e.target.closest('.mode-btn') ||
+          e.target.closest('.block-drag-handle') ||
+          e.target.closest('.block-name-row') ||
+          e.target.closest('.html-iframe') ||
+          e.target.closest('.diagram-canvas') ||
+          e.target.closest('.block-resize-handle')
+        )) return;
+      // 拖动模式：点击内部直接触发移动
+      if (modeState === 'drag') {
+        startDrag(e);
+        return;
+      }
+      // 调整形状模式：检测边缘
+      var dir = detectResizeDir(e);
+      if (!dir) return;
+      beginResize(dir, e);
+    });
       // hover cursor：根据模式和鼠标位置动态切换
       blockEl.addEventListener('mousemove', function(e) {
         if (e.target.closest && (
@@ -5855,6 +7065,7 @@ const Notebook = (function() {
     toolbar.className = 'diagram-toolbar';
     toolbar.setAttribute('contenteditable', 'false');
     var btns = [
+      ['collapse',   '⏷', '折叠工具栏'],
       ['select',     '▢', '选择/移动'],
       ['add-rect',   '▭', '添加矩形'],
       ['add-circle', '◯', '添加圆形'],
@@ -5877,6 +7088,7 @@ const Notebook = (function() {
       ['zoom-out',   '−', '缩小'],
       ['zoom-in',    '+', '放大'],
       ['zoom-reset', '⟳', '重置视图'],
+      ['refresh',    '🔄', '强制刷新'],
       ['save',       '💾', '保存']
     ];
     for (var i = 0; i < btns.length; i++) {
@@ -5997,27 +7209,61 @@ const Notebook = (function() {
     // 获取容器宽度
     var w = this.canvasWrap ? this.canvasWrap.clientWidth : 
             (this.blockEl.clientWidth || this.blockEl.offsetWidth || 600);
-    if (w > 30) w = Math.max(w - 4, 280);
+    // 2026-08-19 修复：块处于隐藏/未布局状态时 clientWidth/offsetWidth 为 0，
+    // 会导致 canvas 0 尺寸 → 渲染空白。兜底到块宽度或默认 600，保证始终有可用尺寸。
+    if (!w || w <= 30) {
+      w = (this.blockEl && (this.blockEl.offsetWidth || this.blockEl.clientWidth)) || 600;
+    }
+    // 2026-08-19 彻底消除留白：块为 flex 纵向布局，canvasWrap flex:1 自动填满
+    // 块内剩余高度（含操作条/工具栏换行等真实占位），直接读 clientHeight 即真实
+    // 可用高度，不再做「块高 - 工具栏高」的估算，任何场景下画布都恰好铺满无缝隙。
     var h = 400;
+    try {
+      if (this.canvasWrap) {
+        var wh = this.canvasWrap.clientHeight;
+        if (wh > 0) h = Math.max(80, wh);
+      }
+    } catch (e) { h = 400; }
     var dpr = window.devicePixelRatio || 1;
     
-    // 设置 canvas 实际像素尺寸
-    this.canvas.width = Math.floor(w * dpr);
-    this.canvas.height = Math.floor(h * dpr);
+    // 设置 canvas 实际像素尺寸（canvas 与 wrap 同尺寸，不留空白边）
+    this.canvas.width = Math.max(1, Math.floor(w * dpr));
+    this.canvas.height = Math.max(1, Math.floor(h * dpr));
     this.canvas.style.width = w + 'px';
     this.canvas.style.height = h + 'px';
-    
-    // 设置 canvas wrap 尺寸
-    if (this.canvasWrap) {
-      this.canvasWrap.style.width = w + 'px';
-      this.canvasWrap.style.height = h + 'px';
-    }
     
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.W = w; 
     this.H = h;
     
     if (this._ctxReady) this.render();
+  };
+
+  // 强制刷新：重新测量容器尺寸 → 重设 canvas → 重置 ctx → 立即渲染，确保瞬间显示
+  DiagramEditor.prototype.forceRefresh = function() {
+    var self = this;
+    try {
+      // 1. 重置 ctx 状态，防止 transform 残留导致渲染异常
+      var dpr = window.devicePixelRatio || 1;
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      // 2. 重新测量容器并设置 canvas 尺寸
+      this.handleResize();
+      // 3. 确保 ctxReady 并立即渲染
+      this._ctxReady = true;
+      this.render();
+      // 4. 闪烁提示
+      this._flash('已刷新');
+    } catch (e) {
+      console.warn('forceRefresh failed:', e);
+    }
+    // 5. 备用：下一帧再刷一次，防止 DOM 布局尚未稳定
+    requestAnimationFrame(function() {
+      try { self.handleResize(); self.render(); } catch (e2) {}
+    });
+    // 6. 最终保险：200ms 后再刷一次
+    setTimeout(function() {
+      try { self.handleResize(); self.render(); } catch (e3) {}
+    }, 200);
   };
 
   DiagramEditor.prototype._bind = function() {
@@ -6357,6 +7603,7 @@ const Notebook = (function() {
 
   DiagramEditor.prototype._onAction = function(action) {
     switch (action) {
+      case 'collapse':    this.toggleToolbar(); break;
       case 'select': this._setMode('select'); break;
       case 'add-rect':    this._setMode('add-rect'); break;
       case 'add-circle':  this._setMode('add-circle'); break;
@@ -6379,8 +7626,24 @@ const Notebook = (function() {
       case 'zoom-in':     this.zoomIn(); break;
       case 'zoom-out':    this.zoomOut(); break;
       case 'zoom-reset':  this.resetView(); break;
+      case 'refresh':     this.forceRefresh(); break;
       case 'save':        saveDiagram(this.diagramId, this.data); this._flash('已保存到本地'); this._snapshotForHistory(); break;
     }
+  };
+
+  // 折叠/展开工具栏：收起后仅保留折叠按钮（其余按钮与提示隐藏），再点展开
+  DiagramEditor.prototype.toggleToolbar = function() {
+    var tb = this.toolbar;
+    if (!tb) return;
+    var collapsed = tb.classList.toggle('collapsed');
+    var btn = tb.querySelector('.diag-collapse');
+    if (btn) {
+      btn.textContent = collapsed ? '⏵' : '⏷';
+      btn.setAttribute('title', collapsed ? '展开工具栏' : '折叠工具栏');
+    }
+    // 收起/展开后画布宽度可能变化，重新测量渲染
+    var self = this;
+    setTimeout(function() { try { self.handleResize(); self.render(); } catch (e) {} }, 50);
   };
 
   // ---------- 视图控制方法 ----------
@@ -7144,6 +8407,82 @@ const Notebook = (function() {
     loadHtml: loadHtml,
     deleteHtml: deleteHtml,
     createHtmlRef: createHtmlRef,
+    // 2026-08-18：附件空间思维导图/流程图内嵌编辑器（双向同步：编辑→localStorage→附件Blob+笔记刷新）
+    createAttachmentDiagramEditor: function(containerEl, data, opts) {
+      if (!containerEl) return null;
+      opts = opts || {};
+      var diagramId = opts.diagramId || _generateDiagramId();
+      // 2026-08-19 修复：优先保留 localStorage 中的最新数据（笔记真源），附件 JSON 只是镜像快照。
+      // 此前无条件用附件数据覆盖 localStorage——若附件是旧快照/空数据，返回笔记后块读到空数据渲染空白。
+      var existing = loadDiagram(diagramId);
+      if (existing) {
+        data = existing;
+      } else {
+        try { localStorage.setItem('shuchongu_diagram_' + diagramId, JSON.stringify(data || { nodes: [], edges: [] })); } catch (e) {}
+      }
+      containerEl.innerHTML = '';
+      var blockEl = document.createElement('div');
+      blockEl.className = 'diagram-block';
+      blockEl.setAttribute('data-diagram-id', diagramId);
+      blockEl.setAttribute('contenteditable', 'false');
+      blockEl.style.position = 'relative';
+      containerEl.appendChild(blockEl);
+      var editor = null;
+      try { editor = new DiagramEditor(blockEl); } catch (e) { console.warn('附件流程图编辑器初始化失败:', e); return null; }
+      // 附件场景去掉「AI改进/删除」操作条（那是笔记预览块的能力）
+      try {
+        var actBar = blockEl.querySelector(':scope > .block-action-bar.diagram-action-bar');
+        if (actBar) actBar.remove();
+      } catch (e) {}
+      // 包装保存：原逻辑写 localStorage → onSave 更新附件源文件 → 刷新笔记中同 id 流程图
+      var origPersist = editor._persist.bind(editor);
+      editor._persist = function() {
+        try { origPersist(); } catch (e) {}
+        try { if (typeof opts.onSave === 'function') opts.onSave(diagramId, editor.data || { nodes: [], edges: [] }); } catch (e) {}
+        try { _refreshDiagramAfterAttachEdit(diagramId); } catch (e) {}
+        try { if (editor._flash) editor._flash('已保存 · 笔记与附件已同步'); } catch (e) {}
+      };
+      editor.attachDiagramId = diagramId;
+      return editor;
+    },
+    // 2026-08-18：导出当前笔记页为图片（png/jpeg），所见即所得
+    exportPageAsImage: async function(pageId, format) {
+      try {
+        var canvas = await _buildExportCanvas(pageId);
+        var fmt = (format === 'jpeg' || format === 'jpg') ? 'jpeg' : 'png';
+        var dataUrl = canvas.toDataURL('image/' + fmt, 0.95);
+        var a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = '笔记_' + String(pageId || 'page').slice(-8) + '.' + fmt;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { a.remove(); }, 200);
+      } catch (e) { alert('导出图片失败：' + (e && e.message ? e.message : e) + _exportDiagSuffix()); }
+    },
+    // 2026-08-18：导出当前笔记页为 PDF（A4 分页），所见即所得
+    exportPageAsPdf: async function(pageId) {
+      try {
+        if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) throw new Error('jsPDF 未加载');
+        var canvas = await _buildExportCanvas(pageId);
+        var pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+        var pw = pdf.internal.pageSize.getWidth();
+        var ph = pdf.internal.pageSize.getHeight();
+        var imgH = canvas.height * pw / canvas.width;
+        var pages = Math.max(1, Math.ceil(imgH / ph - 0.001));
+        for (var i = 0; i < pages; i++) {
+          if (i > 0) pdf.addPage();
+          var sliceTop = Math.round(i * ph * canvas.width / pw);
+          var sliceHpx = Math.round(Math.min(ph, imgH - i * ph) * canvas.width / pw);
+          var tmp = document.createElement('canvas');
+          tmp.width = canvas.width;
+          tmp.height = Math.max(1, sliceHpx);
+          var tctx = tmp.getContext('2d');
+          tctx.drawImage(canvas, 0, sliceTop, canvas.width, sliceHpx, 0, 0, canvas.width, sliceHpx);
+          pdf.addImage(tmp.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pw, Math.min(ph, imgH - i * ph));
+        }
+        pdf.save('笔记_' + String(pageId || 'page').slice(-8) + '.pdf');
+      } catch (e) { alert('导出 PDF 失败：' + (e && e.message ? e.message : e) + _exportDiagSuffix()); }
+    },
     // 开始工具栏
     toggleHomeToolbar: _toggleHomeToolbar,
     execFormat: _execFormat,

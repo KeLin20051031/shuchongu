@@ -99,6 +99,12 @@ const AppShell = (function() {
     if (!aiConfig.cmdOpenMarkers  || !aiConfig.cmdOpenMarkers.length)  aiConfig.cmdOpenMarkers  = DEFAULT_CMD_OPEN.slice();
     if (!aiConfig.cmdCloseMarkers || !aiConfig.cmdCloseMarkers.length) aiConfig.cmdCloseMarkers = DEFAULT_CMD_CLOSE.slice();
     if (!aiConfig.enabledSkills || typeof aiConfig.enabledSkills !== 'object') aiConfig.enabledSkills = {};
+    // 2026-08-18 修复：加载配置后同步指令识别符号到 CommandQueue（多符号数组）
+    try {
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.setDelimiters) {
+        CommandQueue.setDelimiters(aiConfig.cmdOpenMarkers, aiConfig.cmdCloseMarkers);
+      }
+    } catch (e) {}
     // 将 settings 中保存的 enabledSkills 同步到 SkillSystem（双向同步的初始化端）
     if (typeof SkillSystem !== 'undefined' && SkillSystem.saveEnabledSkills) {
       SkillSystem.saveEnabledSkills(aiConfig.enabledSkills);
@@ -205,6 +211,12 @@ const AppShell = (function() {
 
   async function saveSettings() {
     _collectForm();
+    // 2026-08-18 修复：保存配置后立即同步指令识别符号到 CommandQueue（立即生效，无需刷新）
+    try {
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.setDelimiters) {
+        CommandQueue.setDelimiters(aiConfig.cmdOpenMarkers, aiConfig.cmdCloseMarkers);
+      }
+    } catch (e) {}
     await DataLayer.put('settings', aiConfig);
     closeSettings();
   }
@@ -818,18 +830,27 @@ const AppShell = (function() {
     const splitter = document.getElementById('splitter');
     const shelfView = document.getElementById('shelfView');
     const attachView = document.getElementById('attachView');
+    const messageView = document.getElementById('messageView');
     const body = document.body;
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     if (shelfView) shelfView.style.display = (view === 'shelf') ? '' : 'none';
     if (attachView) attachView.style.display = (view === 'attach') ? '' : 'none';
+    if (messageView) messageView.style.display = (view === 'message') ? '' : 'none';
     // 同步 body 视图类，供标注层/边注栏按模式显示或隐藏
     if (body) {
-      body.classList.remove('view-shelf', 'view-read', 'view-note', 'view-split', 'view-attach');
+      body.classList.remove('view-shelf', 'view-read', 'view-note', 'view-split', 'view-attach', 'view-message');
       body.classList.add('view-' + view);
     }
-    const viewMap = { shelf: 'btnViewShelf', read: 'btnViewRead', note: 'btnViewNote', split: 'btnViewSplit', attach: 'btnViewAttach' };
+    const viewMap = { message: 'btnViewMessage', shelf: 'btnViewShelf', read: 'btnViewRead', note: 'btnViewNote', split: 'btnViewSplit', attach: 'btnViewAttach' };
     const tabBtn = viewMap[view] ? document.getElementById(viewMap[view]) : null;
     if (tabBtn) tabBtn.classList.add('active');
+    // 寄语视图：全屏展示，隐藏阅读区
+    if (view === 'message') {
+      pdfReader.style.display = 'none';
+      notebook.style.display = 'none';
+      splitter.style.display = 'none';
+      return;
+    }
     // 书架视图：隐藏阅读区
     if (view === 'shelf') {
       pdfReader.style.display = 'none';
@@ -878,6 +899,71 @@ const AppShell = (function() {
         _reRenderPdfIfNeeded();
         break;
     }
+  }
+
+  // 寄语视图：冷色粒子网络背景动画（canvas 全屏，仅视图可见时绘制）
+  function _initMessageParticles() {
+    var cv = document.getElementById('messageParticles');
+    if (!cv || cv.__msgBound) return;
+    cv.__msgBound = true;
+    var ctx = cv.getContext('2d');
+    var W = 0, H = 0, DPR = window.devicePixelRatio || 1;
+    var pts = [];
+    function spawn() {
+      var n = Math.max(24, Math.min(80, Math.round(W * H / 18000)));
+      pts = [];
+      for (var i = 0; i < n; i++) {
+        pts.push({
+          x: Math.random() * W, y: Math.random() * H,
+          vx: (Math.random() - .5) * .3, vy: (Math.random() - .5) * .3,
+          r: Math.random() * 1.7 + .7,
+          hue: Math.random() < .5 ? 199 : 226
+        });
+      }
+    }
+    function resize() {
+      var r = cv.parentElement.getBoundingClientRect();
+      W = Math.max(10, r.width); H = Math.max(10, r.height);
+      cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      spawn();
+    }
+    function visible() {
+      var el = document.getElementById('messageView');
+      return !!el && el.offsetParent !== null;
+    }
+    function loop() {
+      requestAnimationFrame(loop);
+      if (!visible()) return;
+      ctx.clearRect(0, 0, W, H);
+      var i, j, p;
+      for (i = 0; i < pts.length; i++) {
+        p = pts[i];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < -20) p.x = W + 20; else if (p.x > W + 20) p.x = -20;
+        if (p.y < -20) p.y = H + 20; else if (p.y > H + 20) p.y = -20;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'hsla(' + p.hue + ', 85%, 70%, .85)';
+        ctx.fill();
+      }
+      for (i = 0; i < pts.length; i++) {
+        for (j = i + 1; j < pts.length; j++) {
+          var a = pts[i], b = pts[j];
+          var dx = a.x - b.x, dy = a.y - b.y;
+          var d2 = dx * dx + dy * dy;
+          if (d2 < 14400) {
+            var alpha = (1 - Math.sqrt(d2) / 120) * .26;
+            ctx.strokeStyle = 'hsla(' + Math.round((a.hue + b.hue) / 2) + ', 85%, 70%, ' + alpha + ')';
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          }
+        }
+      }
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    loop();
   }
 
   // 视图切换后等待浏览器 reflow，然后重渲染 PDF 页面以同步标注层尺寸
@@ -988,16 +1074,16 @@ const AppShell = (function() {
       });
     }
 
-    // 等待数据层就绪后初始化书架并默认显示（DataLayer.init 幂等）
+    // 等待数据层就绪后初始化书架（默认首页显示「寄语」视图）
     DataLayer.init().then(function() {
       FileManager.init(grid, { onOpenBook: openBook });
-      _switchView('shelf');
+      _switchView('message');
     }).catch(function(e) {
       console.error('数据层初始化失败:', e);
       _showStorageBanner(e && e.message ? e.message : e);
       alert('书虫蛊无法初始化本地数据库：\n' + (e && e.message ? e.message : e) +
         '\n\n教材导入、笔记本保存等功能将不可用。请按上方提示处理（在线版请确认浏览器允许本地存储）。');
-      _switchView('shelf');
+      _switchView('message');
     });
 
     // 返回书架按钮（PDF 工具栏）
@@ -1098,16 +1184,68 @@ const AppShell = (function() {
     }
 
     if (btnExportZip) {
-      btnExportZip.addEventListener('click', function() {
-        var bookId = _currentExportBookId();
-        if (!bookId) { alert('请先打开一本教材再导出笔记备份'); return; }
-        if (typeof FileManager === 'undefined' || !FileManager.exportBookZip) { alert('导出模块未加载'); return; }
-        FileManager.exportBookZip(bookId).then(function(r) {
-          alert('已导出笔记备份：' + (r && r.fileName ? r.fileName : 'backup.zip'));
-        }).catch(function(e) {
-          alert('导出失败：' + (e && e.message ? e.message : e));
-        });
+      var exportPanel = document.getElementById('exportPanel');
+      // 2026-08-19：导出选择面板（PDF / 图片 / ZIP）
+      function _toggleExportPanel(forceShow) {
+        if (!exportPanel) return;
+        var show = (forceShow === undefined) ? (exportPanel.style.display === 'none') : !!forceShow;
+        if (show) {
+          var r = btnExportZip.getBoundingClientRect();
+          var pw = exportPanel.offsetWidth || 236;
+          exportPanel.style.left = Math.max(8, Math.min(r.left + r.width - pw, (window.innerWidth || 0) - pw - 8)) + 'px';
+          exportPanel.style.top = (r.bottom + 6) + 'px';
+          exportPanel.style.display = 'flex';
+        } else {
+          exportPanel.style.display = 'none';
+        }
+      }
+      function _closeExportPanel() { _toggleExportPanel(false); }
+      btnExportZip.addEventListener('click', function(e) {
+        e.stopPropagation();
+        _toggleExportPanel();
       });
+      if (exportPanel) {
+        exportPanel.addEventListener('click', function(e) { e.stopPropagation(); });
+        var optList = exportPanel.querySelectorAll('.export-opt');
+        Array.prototype.forEach.call(optList, function(opt) {
+          opt.addEventListener('click', function() {
+            var kind = opt.getAttribute('data-export');
+            _closeExportPanel();
+            if (kind === 'pdf' || kind === 'image') {
+              if (typeof Notebook === 'undefined' || !Notebook.getCurrentPageId) { alert('笔记模块未加载'); return; }
+              var pageId = Notebook.getCurrentPageId();
+              if (!pageId) { alert('当前还没有打开的笔记页'); return; }
+              if (kind === 'pdf') {
+                if (typeof Notebook.exportPageAsPdf !== 'function') { alert('PDF 导出模块未加载'); return; }
+                Notebook.exportPageAsPdf(pageId);
+              } else {
+                if (typeof Notebook.exportPageAsImage !== 'function') { alert('图片导出模块未加载'); return; }
+                Notebook.exportPageAsImage(pageId, 'png');
+              }
+              return;
+            }
+            // ZIP：整书包备份（原逻辑）
+            var bookId = _currentExportBookId();
+            if (!bookId) { alert('请先打开一本教材再导出笔记备份'); return; }
+            if (typeof FileManager === 'undefined' || !FileManager.exportBookZip) { alert('导出模块未加载'); return; }
+            FileManager.exportBookZip(bookId).then(function(r) {
+              alert('已导出笔记备份：' + (r && r.fileName ? r.fileName : 'backup.zip'));
+            }).catch(function(e) {
+              alert('导出失败：' + (e && e.message ? e.message : e));
+            });
+          });
+        });
+        document.addEventListener('click', function(e) {
+          if (exportPanel.style.display !== 'none') {
+            if (exportPanel.contains(e.target)) return;
+            if (btnExportZip && btnExportZip.contains(e.target)) return;
+            _closeExportPanel();
+          }
+        });
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') _closeExportPanel();
+        });
+      }
     }
 
     if (btnImportZip && inputZip) {
@@ -1169,6 +1307,8 @@ const AppShell = (function() {
 
     document.getElementById('btnViewRead').addEventListener('click', () => _switchView('read'));
     document.getElementById('btnViewNote').addEventListener('click', () => _switchView('note'));
+    var btnViewMessage = document.getElementById('btnViewMessage');
+    if (btnViewMessage) btnViewMessage.addEventListener('click', () => _switchView('message'));
     var btnViewAttach = document.getElementById('btnViewAttach');
     if (btnViewAttach) btnViewAttach.addEventListener('click', () => _switchView('attach'));
     var btnViewSplit = document.getElementById('btnViewSplit');
@@ -1178,6 +1318,9 @@ const AppShell = (function() {
       _switchView('shelf');
       if (typeof FileManager !== 'undefined') FileManager.render();
     });
+
+    // 寄语视图：冷色粒子网络背景动画（仅视图可见时绘制，切走自动暂停）
+    _initMessageParticles();
 
     // P3-16：附件管理器初始化
     if (typeof AttachmentManager !== 'undefined' && typeof AttachmentManager.init === 'function') {

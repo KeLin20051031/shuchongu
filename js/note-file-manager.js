@@ -214,13 +214,18 @@
     acts.appendChild(actCopy);
     acts.appendChild(actCut);
     acts.appendChild(actDel);
-    // 额外：note 增加 PDF 导出
+    // 额外：note 增加 PDF / 图片 导出（所见即所得）
     if (n.type === 'note') {
-      var actPdf = _actBtn('📄', '导出为 PDF（人看）', function(ev) {
+      var actPdf = _actBtn('📄', '导出为 PDF（渲染版）', function(ev) {
         ev.stopPropagation();
         NoteFileManager.exportNoteAsPdf(n.notebookId);
       });
       acts.appendChild(actPdf);
+      var actImg = _actBtn('🖼', '导出为图片（渲染版）', function(ev) {
+        ev.stopPropagation();
+        NoteFileManager.exportNoteAsImage(n.notebookId);
+      });
+      acts.appendChild(actImg);
     }
     // 额外：note/file 增加 ZIP 导出
     var actZip = _actBtn('📦', '导出 ZIP（系统用）', function(ev) {
@@ -766,7 +771,8 @@
       { t: '📋 复制 (Ctrl+C)', fn: function() { _copy(n.id); } },
       { t: '✂ 剪切 (Ctrl+X)', fn: function() { _cut(n.id); } },
       { t: '📦 导出 ZIP（系统用）', fn: function() { NoteFileManager.exportZip(n.id); } },
-      { t: n.type === 'note' ? '📄 导出 PDF（人看）' : null, fn: function() { if (n.type==='note') NoteFileManager.exportNoteAsPdf(n.notebookId); } },
+      { t: n.type === 'note' ? '📄 导出 PDF（渲染版）' : null, fn: function() { if (n.type==='note') NoteFileManager.exportNoteAsPdf(n.notebookId); } },
+      { t: n.type === 'note' ? '🖼 导出图片（渲染版）' : null, fn: function() { if (n.type==='note') NoteFileManager.exportNoteAsImage(n.notebookId); } },
       { t: null },
       { t: '🗑 删除 (Delete)', fn: function() { _delete(n.id); }, danger: true }
     ];
@@ -810,7 +816,8 @@
       pages: [],
       blocks: [],
       diagrams: {},
-      blockUis: {}
+      blockUis: {},
+      images: {}   // 2026-08-19 笔记图片（scimg:// → base64）
     };
     // 如果指定 nodeId，只导出该子树
     var walk = function(arr, list) {
@@ -866,10 +873,38 @@
             if (k.indexOf('shuchongu_blockui_') === 0) pkg.blockUis[k] = localStorage.getItem(k);
           }
         } catch(e) {}
-        var blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' });
-        var name = (state.bookName || '笔记空间').replace(/[\\\/:*?"<>|]/g, '_') + '_' + new Date().toISOString().slice(0,10) + '.shuchongu.zip.json';
-        _downloadBlob(blob, name);
-        alert('✅ 已导出：' + name + '\n（系统用 JSON 包，可直接用于导入）');
+        // 2026-08-19 图片：收集笔记引用的 scimg:// 图片（Blob → base64）一并导出
+        var imgIds = {};
+        pkg.pages.forEach(function(p) {
+          var mm = String((p && p.mdContent) || '').match(/scimg:\/\/([A-Za-z0-9_\-]+)/g) || [];
+          mm.forEach(function(x) { var id = String(x).replace('scimg://', ''); if (id) imgIds[id] = true; });
+        });
+        var imgKeys = Object.keys(imgIds);
+        var finishExport = function() {
+          var blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' });
+          var name = (state.bookName || '笔记空间').replace(/[\\\/:*?"<>|]/g, '_') + '_' + new Date().toISOString().slice(0,10) + '.shuchongu.zip.json';
+          _downloadBlob(blob, name);
+          alert('✅ 已导出：' + name + '\n（系统用 JSON 包，可直接用于导入）');
+        };
+        if (dl && imgKeys.length) {
+          var imgPromises = imgKeys.map(function(id) {
+            return dl.get('noteImages', id).then(function(rec) {
+              if (!rec || !rec.blob) return null;
+              return new Promise(function(res2) {
+                var fr2 = new FileReader();
+                fr2.onload = function() { res2({ id: id, dataUrl: String(fr2.result || ''), mime: rec.blob.type || 'image/jpeg', name: rec.name || '' }); };
+                fr2.onerror = function() { res2(null); };
+                fr2.readAsDataURL(rec.blob);
+              });
+            });
+          });
+          Promise.all(imgPromises).then(function(imgs) {
+            (imgs || []).forEach(function(img) { if (img) pkg.images[img.id] = { dataUrl: img.dataUrl, mime: img.mime, name: img.name }; });
+            finishExport();
+          });
+          return;
+        }
+        finishExport();
       });
     });
   }
@@ -945,6 +980,27 @@
         // 恢复 diagrams / blockUis
         if (pkg.diagrams) { for (var k in pkg.diagrams) { try { localStorage.setItem(k, pkg.diagrams[k]); } catch(e){} } }
         if (pkg.blockUis)   { for (var kk in pkg.blockUis) { try { localStorage.setItem(kk, pkg.blockUis[kk]); } catch(e){} } }
+        // 2026-08-19 图片：恢复导出包中的 noteImages（base64 → Blob）
+        if (dl && pkg.images) {
+          Object.keys(pkg.images).forEach(function(id) {
+            var im = pkg.images[id];
+            if (!im || !im.dataUrl) return;
+            try {
+              var parts = String(im.dataUrl).split(',');
+              var mime = im.mime || 'image/jpeg';
+              if (!parts[0] || parts[0].indexOf('data:') === 0) {
+                var mm = parts[0] && parts[0].match(/data:([^;]+);/);
+                if (mm && mm[1]) mime = mm[1];
+              }
+              var b64 = parts[1] || '';
+              var bin = atob(b64);
+              var arr = new Uint8Array(bin.length);
+              for (var bi2 = 0; bi2 < bin.length; bi2++) arr[bi2] = bin.charCodeAt(bi2);
+              var blob = new Blob([arr], { type: mime });
+              dl.put('noteImages', { id: id, blob: blob, name: im.name || '', mime: mime, createdAt: Date.now() });
+            } catch (e) { console.warn('恢复图片失败:', id, e); }
+          });
+        }
         // 合并树
         srcChildren.forEach(function(c) { tree.children.push(c); });
         saveTree(state.pdfId, tree);
@@ -967,20 +1023,55 @@
     setTimeout(function() { a.remove(); URL.revokeObjectURL(url); }, 100);
   }
 
-  // ---------- 导出 PDF（人看） ----------
-  function _exportNoteAsPdf(notebookId) {
-    // 实现：调用浏览器打印（带横线样式的纸张视图）
-    if (!notebookId) { alert('没有选择笔记'); return; }
-    // 尝试切换并打开全屏笔记打印
+  // ---------- 导出 PDF / 图片（人看·渲染版，所见即所得） ----------
+  // 2026-08-18：委托 Notebook 的 html2canvas 渲染导出，与笔记预览效果一致。
+  function _resolveNoteFirstPageId(notebookId) {
     try {
-      if (window.Notebook && typeof Notebook.printPdf === 'function') {
-        Notebook.printPdf(notebookId);
-        return;
+      if (typeof DataLayer !== 'undefined' && DataLayer.get) {
+        return DataLayer.get('notebooks', notebookId).then(function(nb) {
+          if (nb && nb.pages && nb.pages.length) return nb.pages[0];
+          return null;
+        }).catch(function() { return null; });
       }
     } catch (e) {}
-    // 兜底：print
-    alert('📄 正在调用浏览器打印……\n提示：在打印对话框中选择「另存为 PDF」即可');
-    setTimeout(function() { window.print(); }, 200);
+    return Promise.resolve(null);
+  }
+  async function _exportNoteAsImage(notebookId) {
+    if (!notebookId) { alert('没有选择笔记'); return; }
+    var pid = null;
+    try { if (typeof Notebook !== 'undefined' && Notebook.getCurrentPageId) pid = Notebook.getCurrentPageId(); } catch (e) {}
+    if (!pid) pid = await _resolveNoteFirstPageId(notebookId);
+    if (!pid) { alert('未找到笔记页面'); return; }
+    if (typeof Notebook !== 'undefined' && Notebook.exportPageAsImage) {
+      await Notebook.exportPageAsImage(pid, 'png');
+    } else {
+      alert('导出组件未就绪（Notebook.exportPageAsImage 缺失）');
+    }
+  }
+  function _exportNoteAsPdf(notebookId) {
+    if (!notebookId) { alert('没有选择笔记'); return; }
+    // 渲染版 PDF（html2canvas + jsPDF，A4 分页，与预览一致）
+    var pid = null;
+    try { if (typeof Notebook !== 'undefined' && Notebook.getCurrentPageId) pid = Notebook.getCurrentPageId(); } catch (e) {}
+    var doPdf = function(firstPid) {
+      var target = firstPid || pid;
+      if (!target) { alert('未找到笔记页面'); return; }
+      if (typeof Notebook !== 'undefined' && Notebook.exportPageAsPdf) {
+        Notebook.exportPageAsPdf(target);
+      } else {
+        // 兜底：浏览器打印
+        try {
+          if (typeof Notebook.printPdf === 'function') { Notebook.printPdf(notebookId); return; }
+        } catch (e) {}
+        alert('📄 正在调用浏览器打印……\n提示：在打印对话框中选择「另存为 PDF」即可');
+        setTimeout(function() { window.print(); }, 200);
+      }
+    };
+    if (!pid) {
+      _resolveNoteFirstPageId(notebookId).then(doPdf);
+    } else {
+      doPdf(pid);
+    }
   }
 
   // ---------- 快捷键 ----------
@@ -1329,6 +1420,8 @@
     exportZip: _doExportZip,
     importZip: _doImportZip,
     exportNoteAsPdf: _exportNoteAsPdf,
+    // 2026-08-18：导出笔记为图片/PDF（渲染版，所见即所得）
+    exportNoteAsImage: _exportNoteAsImage,
     closeCurrentNote: _closeCurrentNote
   };
 })();

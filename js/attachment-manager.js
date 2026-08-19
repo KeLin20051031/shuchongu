@@ -74,7 +74,11 @@ var AttachmentManager = (function() {
     if (['xls', 'xlsx', 'csv'].indexOf(ext) >= 0) return '📊';
     if (['ppt', 'pptx'].indexOf(ext) >= 0) return '📽';
     if (['zip', 'rar', '7z', 'gz'].indexOf(ext) >= 0) return '🗜';
-    if (['js', 'json', 'html', 'css', 'py', 'java', 'c', 'cpp'].indexOf(ext) >= 0) return '🔧';
+    if (['js', 'json', 'html', 'css', 'py', 'java', 'c', 'cpp'].indexOf(ext) >= 0) {
+      // 2026-08-18：流程图/思维导图 JSON 附件用专属图标
+      if (/^流程图_/i.test(name || '')) return '🧠';
+      return '🔧';
+    }
     return '📎';
   }
 
@@ -465,13 +469,23 @@ var AttachmentManager = (function() {
         content.appendChild(hframe);
       } else if (mime.indexOf('text') === 0 || mime === 'application/json' ||
                  ['txt', 'md', 'json', 'js', 'css', 'py', 'java', 'c', 'cpp', 'csv', 'xml'].indexOf(ext) >= 0) {
-        // 文本文件：读取前 50KB
+        // 文本/JSON 文件：读取内容后判断是否为「思维导图/流程图」（canvas-diagram JSON）
         var textBlob = new Blob([buf], { type: 'text/plain' });
         var reader = new FileReader();
         reader.onload = function() {
+          var text = reader.result || '';
+          // 2026-08-18：canvas-diagram JSON（含 nodes+edges 数组）→ 附件空间内嵌可编辑画布，
+          // 与笔记双向同步：附件中修改 → localStorage + 附件源文件 → 笔记同 id 流程图同步更新（反之亦然）
+          var parsed = null;
+          if (mime === 'application/json' || ext === 'json') {
+            try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+          }
+          if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
+            _renderDiagramEditor(node, content, parsed);
+            return;
+          }
           var pre = document.createElement('pre');
           pre.className = 'attach-preview-text';
-          var text = reader.result || '';
           if (text.length > 50000) text = text.substring(0, 50000) + '\n\n... (仅显示前 50KB)';
           pre.textContent = text;
           content.appendChild(pre);
@@ -491,6 +505,105 @@ var AttachmentManager = (function() {
     }).catch(function(e) {
       previewEl.innerHTML = '<div class="attach-preview-empty">加载失败：' + (e && e.message ? e.message : e) + '</div>';
     });
+  }
+
+  // ---------- 思维导图/流程图 内嵌编辑器（与笔记双向同步）----------
+  // 2026-08-18：附件中的 canvas-diagram JSON 附件可在附件空间直接编辑。
+  // 保存 → 更新 localStorage（笔记同 id 流程图同步）+ 更新本附件源文件 Blob + 刷新笔记预览。
+  function _renderDiagramEditor(node, content, data) {
+    // 从附件节点还原 diagramId：来自笔记镜像的附件 nodeId 前缀为 diagram_
+    var diagramId = null;
+    var nid = String(node.id || '');
+    if (nid.indexOf('diagram_') === 0) diagramId = nid.slice('diagram_'.length);
+
+    var editorWrap = document.createElement('div');
+    editorWrap.className = 'attach-diagram-editor';
+    var bar = document.createElement('div');
+    bar.className = 'attach-diagram-bar';
+    bar.innerHTML =
+      '<span class="attach-diagram-hint">🔄 与笔记双向同步：附件中修改保存后，笔记里同一流程图同步更新（反之亦然）</span>'
+      + '<button class="attach-diagram-btn attach-diagram-refresh" type="button">🔄 刷新</button>'
+      + '<button class="attach-diagram-btn attach-diagram-save" type="button">💾 保存</button>'
+      + '<button class="attach-diagram-btn attach-diagram-export-png" type="button">🖼 导出图片</button>'
+      + '<button class="attach-diagram-btn attach-diagram-export-pdf" type="button">📄 导出PDF</button>';
+    var holder = document.createElement('div');
+    holder.className = 'attach-diagram-holder';
+    editorWrap.appendChild(bar);
+    editorWrap.appendChild(holder);
+    content.appendChild(editorWrap);
+
+    var editor = null;
+    try {
+      if (typeof Notebook !== 'undefined' && Notebook.createAttachmentDiagramEditor) {
+        editor = Notebook.createAttachmentDiagramEditor(holder, data, {
+          diagramId: diagramId || undefined,
+          onSave: function(did, d) {
+            // 1) 更新本附件源文件 Blob（保持原节点 id，附件树不新增重复文件）
+            try {
+              var text2 = JSON.stringify(d || { nodes: [], edges: [] }, null, 2);
+              DataLayer.put('attachments', {
+                id: node.id, bookId: node.bookId, parentId: node.parentId,
+                data: new Blob([text2], { type: 'application/json' }),
+                name: node.name, mimeType: 'application/json', size: text2.length
+              }).catch(function() {});
+              // 2) 树节点 size 更新
+              var tree2 = getTree(state.bookId);
+              var f = findNode(tree2.children, node.id, tree2.children, null);
+              if (f) { f.node.size = text2.length; saveTree(state.bookId, tree2); }
+            } catch (e) {}
+          }
+        });
+      }
+    } catch (e) { editor = null; }
+
+    if (!editor) {
+      content.innerHTML = '<div class="attach-preview-empty">无法初始化思维导图编辑器</div>';
+      return;
+    }
+
+    // 刷新按钮：强制重新测量容器并渲染，解决画布卡住不显示的问题
+    var refreshBtn = bar.querySelector('.attach-diagram-refresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', function() {
+      try { if (editor && editor.forceRefresh) editor.forceRefresh(); } catch (e) {}
+    });
+    // 保存按钮：触发编辑器持久化（走包装后的 _persist：localStorage + 附件 Blob + 笔记刷新）
+    var saveBtn = bar.querySelector('.attach-diagram-save');
+    if (saveBtn) saveBtn.addEventListener('click', function() {
+      try { editor._persist(); } catch (e) { alert('保存失败：' + (e && e.message ? e.message : e)); }
+    });
+    // 导出图片 / PDF：直接抓取编辑器 canvas（所见即所得）
+    var expPng = bar.querySelector('.attach-diagram-export-png');
+    if (expPng) expPng.addEventListener('click', function() { _exportDiagramCanvas(editor, false); });
+    var expPdf = bar.querySelector('.attach-diagram-export-pdf');
+    if (expPdf) expPdf.addEventListener('click', function() { _exportDiagramCanvas(editor, true); });
+  }
+
+  // 把流程图编辑器画布导出为 PNG / PDF（与笔记预览一致）
+  function _exportDiagramCanvas(editor, asPdf) {
+    try {
+      if (!editor || !editor.canvas) { alert('编辑器未就绪'); return; }
+      try { editor.render && editor.render(); } catch (e) {}
+      var c = editor.canvas;
+      var dataUrl = c.toDataURL('image/png');
+      var name = '流程图_' + (editor.attachDiagramId || '') + (asPdf ? '.pdf' : '.png');
+      if (!asPdf) {
+        var a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { a.remove(); }, 200);
+        return;
+      }
+      if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) { alert('jsPDF 未加载'); return; }
+      var pdf = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+      var pw = pdf.internal.pageSize.getWidth();
+      var ph = pdf.internal.pageSize.getHeight();
+      var imgW = pw, imgH = c.height * pw / c.width;
+      if (imgH > ph) { imgH = ph; imgW = c.width * ph / c.height; }
+      pdf.addImage(dataUrl, 'PNG', (pw - imgW) / 2, (ph - imgH) / 2, imgW, imgH);
+      pdf.save(name);
+    } catch (e) { alert('导出失败：' + (e && e.message ? e.message : e)); }
   }
 
   function _clearPreview() {
@@ -676,6 +789,40 @@ var AttachmentManager = (function() {
           var node = {
             id: id, type: 'file', name: name,
             mimeType: mime, size: content.length,
+            addedAt: Date.now(), parentId: 'root', bookId: bookId
+          };
+          if (existing) {
+            existing.parentArr[existing.index] = node;
+          } else {
+            if (!tree.children) tree.children = [];
+            tree.children.push(node);
+          }
+          saveTree(bookId, tree);
+          return node;
+        }).catch(function(e) { console.warn('写入附件失败:', e); return null; });
+      } catch (e) { return Promise.resolve(null); }
+    },
+    // 以 Blob 内容创建/覆盖一个附件（图片等二进制文件镜像；nodeId 相同则幂等覆盖）
+    addSourceBlob: function(bookId, name, blob, mimeType, nodeId) {
+      try {
+        if (!bookId) return Promise.resolve(null);
+        if (typeof Blob === 'undefined' || !(blob instanceof Blob)) return Promise.resolve(null);
+        var mime = mimeType || blob.type || 'application/octet-stream';
+        var id = nodeId || _uid('att');
+        var tree = getTree(bookId);
+        var existing = findNode(tree.children, id, tree.children, null);
+        return DataLayer.put('attachments', {
+          id: id,
+          bookId: bookId,
+          parentId: 'root',
+          data: blob,
+          name: name,
+          mimeType: mime,
+          size: blob.size || 0
+        }).then(function() {
+          var node = {
+            id: id, type: 'file', name: name,
+            mimeType: mime, size: blob.size || 0,
             addedAt: Date.now(), parentId: 'root', bookId: bookId
           };
           if (existing) {

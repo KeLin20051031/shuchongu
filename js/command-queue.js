@@ -8,13 +8,31 @@ const CommandQueue = (function() {
   let _uiReady = false;      // UI 是否已初始化
 
   // ============================================================
-  // 2026-08-15 新增：自定义指令前后符号（默认 、、 与 。。）
+  // 2026-08-15 新增：自定义指令前后符号（默认 [、、、 /、 @ai ] × [。。、 ...、 。。。]）
   // 用户可选比如 【 】 《 》 {{ }} 等任意 pair，持久化 localStorage
+  // 统一数组格式：{ open: string[], close: string[] }，兼容输入时的单字符串（自动转为数组）
   // ============================================================
   const _DELIM_STORAGE_KEY = 'shuchongu_cmd_delimiters_v1';
-  const _DEFAULT_DELIMITERS = { open: '、、', close: '。。' };
+  const _DEFAULT_DELIMITERS = {
+    open:  ['/', '@ai ', '↺', '、、'],
+    close: ['。。', '...', '。。。']
+  };
   let _delimiters = null;   // 懒加载，首次 getDelimiters() 时从 localStorage 读
 
+  function _toArr(v) {
+    if (v === null || v === undefined) return [];
+    if (Array.isArray(v)) return v.filter(function(x) { return typeof x === 'string' && x.length > 0; });
+    if (typeof v === 'string') return v.length > 0 ? [v] : [];
+    return [];
+  }
+  function _normDelims(o) {
+    var open  = _toArr(o && o.open);
+    var close = _toArr(o && o.close);
+    // 空数组兜底默认值（避免完全没符号 → 完全检测不到）
+    if (!open.length)  open  = _DEFAULT_DELIMITERS.open.slice();
+    if (!close.length) close = _DEFAULT_DELIMITERS.close.slice();
+    return { open: open, close: close };
+  }
   function _loadDelimiters() {
     if (_delimiters) return _delimiters;
     try {
@@ -22,23 +40,30 @@ const CommandQueue = (function() {
         var raw = localStorage.getItem(_DELIM_STORAGE_KEY);
         if (raw) {
           var o = JSON.parse(raw);
-          if (o && typeof o.open === 'string' && typeof o.close === 'string' && o.open && o.close) {
-            _delimiters = { open: o.open, close: o.close };
+          if (o && (o.open !== undefined || o.close !== undefined)) {
+            _delimiters = _normDelims(o);
             return _delimiters;
           }
         }
       }
     } catch (e) {}
-    _delimiters = { open: _DEFAULT_DELIMITERS.open, close: _DEFAULT_DELIMITERS.close };
+    _delimiters = { open: _DEFAULT_DELIMITERS.open.slice(), close: _DEFAULT_DELIMITERS.close.slice() };
     return _delimiters;
   }
   function getDelimiters() { return _loadDelimiters(); }
   function setDelimiters(open, close) {
-    if (typeof open !== 'string' || !open || typeof close !== 'string' || !close) {
-      throw new Error('setDelimiters: 前后符号都不能为空');
+    // 支持两种调用：setDelimiters('、、', '。。') 或 setDelimiters(['、、','/'], ['。。'])
+    var openArr  = _toArr(open);
+    var closeArr = _toArr(close);
+    if (!openArr.length)  throw new Error('setDelimiters: 开头符号不能为空');
+    if (!closeArr.length) throw new Error('setDelimiters: 结尾符号不能为空');
+    // 校验：任意开头与结尾若相同 → 拒绝（避免死匹配空串）
+    for (var i = 0; i < openArr.length; i++) {
+      for (var j = 0; j < closeArr.length; j++) {
+        if (openArr[i] === closeArr[j]) throw new Error('setDelimiters: 开头符号「' + openArr[i] + '」与结尾符号相同');
+      }
     }
-    if (open === close) throw new Error('setDelimiters: 前后符号不能相同');
-    _delimiters = { open: open, close: close };
+    _delimiters = { open: openArr, close: closeArr };
     try { if (typeof localStorage !== 'undefined') {
       localStorage.setItem(_DELIM_STORAGE_KEY, JSON.stringify(_delimiters));
     }} catch (e) {}
@@ -46,7 +71,7 @@ const CommandQueue = (function() {
     return _delimiters;
   }
   function resetDelimiters() {
-    _delimiters = { open: _DEFAULT_DELIMITERS.open, close: _DEFAULT_DELIMITERS.close };
+    _delimiters = { open: _DEFAULT_DELIMITERS.open.slice(), close: _DEFAULT_DELIMITERS.close.slice() };
     try { if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(_DELIM_STORAGE_KEY);
     }} catch (e) {}
@@ -57,13 +82,15 @@ const CommandQueue = (function() {
   function _escapeForRegex(s) { return String(s).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
   function _makeDetectRegex() {
     var d = _loadDelimiters();
-    return new RegExp(_escapeForRegex(d.open) + '([\\s\\S]+?)' + _escapeForRegex(d.close), 'g');
+    var openUnion  = '(' + d.open.map(_escapeForRegex).join('|')  + ')';
+    var closeUnion = '(' + d.close.map(_escapeForRegex).join('|') + ')';
+    return new RegExp(openUnion + '([\\s\\S]+?)' + closeUnion, 'g');
   }
 
   // 意图判断（骨架版：关键词启发式；P3 细化为完整意图识别）
   function _inferType(raw) {
     const t = (raw || '').toLowerCase();
-    if (/总结|概括|提炼|summar/i.test(t)) return 'summarize';
+    if (/总结|概括|提炼|整理|梳理|归纳|summar/i.test(t)) return 'summarize';
     if (/翻译|translate/i.test(t)) return 'translate';
     if (/生成|generate|写一篇|产出/i.test(t)) return 'generate';
     if (/为什么|是什么|怎么|如何|解释|含义|请回答|问一下|帮我查/i.test(t)) return 'ask';
@@ -74,14 +101,14 @@ const CommandQueue = (function() {
     return 'cmd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   }
 
-  // 提取 <open>指令<close> → Command[]（不改正文；pageId/notebookId 由上层 enqueue 前补齐）
+  // 提取 (open1|open2)...(close1|close2) → Command[]（不改正文；pageId/notebookId 由上层 enqueue 前补齐）
   function detect(text) {
     if (typeof text !== 'string' || !text) return [];
     const re = _makeDetectRegex();
     const out = [];
     let m;
     while ((m = re.exec(text)) !== null) {
-      const raw = (m[1] || '').trim();
+      const raw = (m[2] || '').trim();
       if (!raw) continue;
       out.push({
         id: _newId(),
@@ -95,17 +122,26 @@ const CommandQueue = (function() {
     return out;
   }
 
-  // 实时检测未闭合的 <open> 起始标记（输入 <open> 即触发，无需等待完整闭合）
+  // 实时检测未闭合的起始标记（输入任意开头符号后即触发，无需等待完整闭合）
   // 返回 { raw, hasOpenMark, hasContent } 或 null。
-  // 规则：取文本中最后一个 <open>；若其后（到行尾）不再出现 <close>，视为「正在书写」的指令片段。
+  // 规则：取文本中最后一个「任意 open」；若其后（到行尾）不再出现「任意 close」，视为「正在书写」的指令片段。
   function detectLive(text) {
     if (typeof text !== 'string' || !text) return null;
     var d = _loadDelimiters();
-    var idx = text.lastIndexOf(d.open);
-    if (idx < 0) return null;
-    var tail = text.slice(idx + d.open.length);
-    // 后面还有 close 说明已经闭合，交给闭合检测（detect）处理
-    if (tail.indexOf(d.close) >= 0) return null;
+    // 找最后一个任意 open 的位置
+    var bestIdx = -1, bestOp = null, opLen = 0;
+    for (var i = 0; i < d.open.length; i++) {
+      var op = d.open[i]; if (!op) continue;
+      var idx = text.lastIndexOf(op);
+      if (idx > bestIdx) { bestIdx = idx; bestOp = op; opLen = op.length; }
+    }
+    if (bestIdx < 0 || !bestOp) return null;
+    var tail = text.slice(bestIdx + opLen);
+    // 后面有任意 close → 已经闭合，交给闭合检测（detect）处理
+    for (var j = 0; j < d.close.length; j++) {
+      var cl = d.close[j]; if (!cl) continue;
+      if (tail.indexOf(cl) >= 0) return null;
+    }
     // 只取到行尾，避免跨行误判
     var nl = tail.indexOf('\n');
     if (nl >= 0) tail = tail.slice(0, nl);
@@ -329,11 +365,11 @@ const CommandQueue = (function() {
     return cmd;
   }
 
-  // 全部命令（createdAt 升序 = FIFO 顺序）
+  // 全部命令（2026-08-18 改降序：新任务在上优先展示；调度消费顺序不受影响——调度器用 listPendingCommands 独立 FIFO）
   async function list() {
     let all = [];
     try { all = await DataLayer.listCommands(); } catch (e) { all = []; }
-    all.sort(function(a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+    all.sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
     all.forEach(function(c) { if (c && c.raw) _statusCache[c.raw] = c.status; });
     return all;
   }
@@ -801,8 +837,10 @@ const CommandQueue = (function() {
   function _paintQueue(listEl, items) {
     if (!items.length) {
       var d = _loadDelimiters();
+      var openTip = (Array.isArray(d.open) && d.open.length) ? d.open[0] : '、、';
+      var closeTip = (Array.isArray(d.close) && d.close.length) ? d.close[0] : '。。';
       listEl.innerHTML = '<div class="command-queue-empty">暂无指令。在笔记中输入 <code>'
-        + _escapeHtml(d.open) + '指令' + _escapeHtml(d.close)
+        + _escapeHtml(openTip) + '指令' + _escapeHtml(closeTip)
         + '</code> 即可入队。</div>';
       return;
     }

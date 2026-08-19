@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -8,15 +8,16 @@
 <meta http-equiv="Expires" content="0">
 <title>书虫蛊 - AI文献阅读器</title>
 <link rel="icon" href="data:," />
-<link rel="stylesheet" href="css/style.css?v=146">
-<script src="lib/pdf.min.js?v=146"></script>
-<script src="lib/marked.min.js?v=146"></script>
+<link rel="stylesheet" href="css/style.css?v=155">
+<script src="lib/pdf.min.js?v=145"></script>
+<script src="lib/marked.min.js?v=145"></script>
 </head>
 <body>
 <div id="app">
   <header id="topbar">
     <div class="logo" title="书虫蛊 书籍阅读 从教材中提炼知识火花">📚 书虫蛊<span class="logo-sub">深度书籍阅读器</span></div>
     <nav class="view-tabs">
+      <button id="btnViewMessage" class="tab-btn active" title="寄语">💌 寄语</button>
       <button id="btnViewShelf" class="tab-btn" title="书架">📚 书架</button>
       <button id="btnViewRead" class="tab-btn" title="阅读 PDF">📖 阅读</button>
       <button id="btnViewNote" class="tab-btn" title="笔记（整合分栏：PDF右侧笔记空间）">📝 笔记</button>
@@ -29,6 +30,20 @@
     </div>
   </header>
   <main id="main">
+    <!-- 寄语视图（默认首页）：冷色粒子背景 + 玻璃卡片，风格与书虫助手一致 -->
+    <section id="messageView" class="message-view">
+      <canvas id="messageParticles" class="message-particles"></canvas>
+      <div class="message-inner">
+        <div class="message-card">
+          <div class="message-badge">📖 书虫蛊 · 寄语</div>
+          <h1 class="message-title">
+            <span class="mt-line">祝一诺</span>
+            <span class="mt-line"><span class="mt-num">2026</span> 生日快乐</span>
+          </h1>
+          <p class="message-desc">本项目 2026 年 7 月末开始动工，主要 AI 编程，以搭建 AI 与笔记的最后一步为设计核心，项目持续改进中。如果有兴趣一起参与，可以拍拍我。</p>
+        </div>
+      </div>
+    </section>
     <!-- 书架视图：文件管理与图书浏览 -->
     <section id="shelfView" class="shelf-view">
       <div class="shelf-hero">
@@ -356,7 +371,13 @@
         </div>
         <span class="tb-sep"></span>
         <div class="tb-group">
-          <button id="btnExportZip" class="notebook-btn" title="导出整书包笔记备份（ZIP，含笔记/书签/指令/参考材料，可选 PDF）">⬇ 导出</button>
+          <button id="btnExportZip" class="notebook-btn" title="导出：PDF / 图片 / ZIP 备份（点击展开选择面板）">⬇ 导出</button>
+          <div id="exportPanel" class="export-panel" style="display:none;">
+            <div class="export-panel-head">选择导出方式</div>
+            <button type="button" class="export-opt" data-export="pdf" title="当前笔记页渲染为 PDF（所见即所得）">📄 导出 PDF<span class="export-opt-sub">当前笔记页 · 所见即所得</span></button>
+            <button type="button" class="export-opt" data-export="image" title="当前笔记页渲染为图片（所见即所得）">🖼 导出图片<span class="export-opt-sub">当前笔记页 · 所见即所得</span></button>
+            <button type="button" class="export-opt" data-export="zip" title="整书包笔记备份 ZIP（含笔记/书签/指令/参考材料）">📦 导出 ZIP<span class="export-opt-sub">整书包备份</span></button>
+          </div>
           <button id="btnImportZip" class="notebook-btn" title="导入笔记备份（ZIP 恢复，幂等去重）">⬆ 导入</button>
           <input type="file" id="inputZipFile" accept=".zip" style="display:none" />
           <button id="btnPrintNote" class="notebook-btn" title="打印当前笔记页（横线样式）">🖨 打印</button>
@@ -697,29 +718,32 @@ window.addEventListener('unhandledrejection', function(e) {
 </script>
 <!-- 模块脚本（顺序加载，后者依赖前者） -->
 <script src="js/data-layer.js?v=146"></script>
-  <script src="js/zip-utils.js?v=146"></script>
+  <script src="js/zip-utils.js?v=145"></script>
   <script src="js/command-queue.js?v=146"></script>
-  <script src="js/file-manager.js?v=146"></script>
-  <script src="js/ai-adapter.js?v=146"></script>
-  <script src="js/pdf-reader.js?v=146"></script>
-  <script src="js/pdf-annotate.js?v=146"></script>
-  <script src="js/diff.js?v=146"></script>
+  <script src="js/file-manager.js?v=145"></script>
+  <script src="js/ai-adapter.js?v=145"></script>
+  <script src="js/pdf-reader.js?v=145"></script>
+  <script src="js/pdf-annotate.js?v=145"></script>
+  <script src="js/diff.js?v=145"></script>
   <script src="js/md-convert.js?v=146"></script>
-  <script src="js/reference-manager.js?v=146"></script>
-  <script src="js/notebook.js?v=146"></script>
-  <script src="js/note-file-manager.js?v=146"></script>
-  <script src="js/attachment-manager.js?v=146"></script>
-  <script src="js/skill-manager.js?v=146"></script>
-  <script src="js/skill-system.js?v=146"></script>
+  <script src="js/reference-manager.js?v=145"></script>
+  <script src="js/notebook.js?v=162"></script>
+  <script src="js/note-file-manager.js?v=147"></script>
+  <script src="js/attachment-manager.js?v=147"></script>
+  <!-- 2026-08-18 新增：导出图片/PDF 用（html2canvas 渲染预览 DOM、jsPDF 组页） -->
+  <script src="lib/html2canvas.min.js?v=146"></script>
+  <script src="lib/jspdf.umd.min.js?v=146"></script>
+  <script src="js/skill-manager.js?v=145"></script>
+  <script src="js/skill-system.js?v=145"></script>
   <script src="js/ai-engine.js?v=146"></script>
-  <script src="js/help-center.js?v=146"></script>
+  <script src="js/help-center.js?v=145"></script>
 <!-- 阿里 PageAgent：纯前端 GUI Agent，AI 自主操控网页（autoInit=false 不自动弹免费 demo 面板） -->
   <script src="https://registry.npmmirror.com/page-agent/1.12.2/files/dist/iife/page-agent.demo.js?autoInit=false" crossorigin="anonymous" onerror="console.warn('[PageAgent] CDN 加载失败，跳过自主操作能力')"></script>
   <!-- 保存阿里 PageAgent 构造函数到独立全局名，避免被下方 js/page-agent.js 的 var PageAgent 覆盖 -->
   <script>window.AlibabaPageAgent = window.PageAgent;</script>
-  <script src="js/page-agent.js?v=146"></script>
-  <script src="js/app-shell.js?v=146"></script>
-  <script src="js/shelf-jellyfish.js?v=146"></script>
+  <script src="js/page-agent.js?v=145"></script>
+  <script src="js/app-shell.js?v=147"></script>
+  <script src="js/shelf-jellyfish.js?v=145"></script>
   <!-- CodeMirror 6 原型（MD 笔记本编辑器底座，独立于现有 notebook.js 数据模型）
        注：ESM 脚本会在所有同步脚本后执行，所以 notebook.js 初始化时 __cm 尚不可用。
        notebook.js 在创建编辑器前会等 __cmReady 事件（最多 5s），避免出现"CodeMirror 未加载"空壳。 -->

@@ -1,7 +1,7 @@
 // Data Layer 模块 — IndexedDB 封装
 const DataLayer = (function() {
   const DB_NAME = 'BookwormDB';
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   let db = null;
   let _initPromise = null;   // init 幂等：同一 Promise 复用，避免并发重复 open
   let _upgradeInfo = null;   // 记录最近一次 DB 升级信息（oldVersion → newVersion）
@@ -19,7 +19,8 @@ const DataLayer = (function() {
     annotations: { keyPath: 'id', indexes: [] },   // AI 划重点：每本书一份 { id: bookId, pages: { pageNum: [ann] } }
     commands:  { keyPath: 'id', indexes: [{ name: 'by_status', keyPath: 'status' }, { name: 'by_pageId', keyPath: 'pageId' }] },   // v4：、、指令。。 FIFO 待办队列
     referenceMats: { keyPath: 'id', indexes: [{ name: 'by_bookId', keyPath: 'bookId' }] },   // v4：每本书专属参考材料 MD
-    attachments: { keyPath: 'id', indexes: [{ name: 'by_bookId', keyPath: 'bookId' }, { name: 'by_parentId', keyPath: 'parentId' }] }   // v5：附件管理（文件树+Blob）
+    attachments: { keyPath: 'id', indexes: [{ name: 'by_bookId', keyPath: 'bookId' }, { name: 'by_parentId', keyPath: 'parentId' }] },   // v5：附件管理（文件树+Blob）
+    noteImages: { keyPath: 'id', indexes: [] }   // v6：笔记图片（Blob 独立存储，笔记只存 scimg:// 引用）
   };
 
   function _friendlyStorageError(detail) {

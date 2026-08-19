@@ -2137,10 +2137,31 @@ const AIEngine = (function() {
       keyword: '',          // 提取的关键词（如"XXX"、"第N点"）
       content: '',          // 提取的新内容（add / modify 用）
       targetLine: -1,       // 目标行下标（第N点 → N-1；-1 表示未知）
-      raw: text
+      raw: text,
+      isDiagram: false,     // 流程图/画图类：走 contentMd 产出 canvas-diagram 图数据
+      isHtml: false         // HTML/网页/可视化类：走 contentMd 产出 ```html 块
     };
 
     if (!text) return intent;
+
+    // 2026-08-18 修复：流程图/画图类指令优先判定（放在动作识别之前），
+    // 避免「用流程图表现补充XX」被"补充"命中为 add 走 edit 分支、丢弃 LLM 图数据。
+    // 归为 generate（非 edit），由 _tryLlmDesignPlan 的 diagramHint 引导输出 nodes/edges JSON。
+    if (/流程图|机制图|概念图|示意图|画图|制图|diagram|flowchart|通路|循环图|路径图|关系图|思维导图|代谢|schematic|pathway/.test(text)) {
+      intent.type = 'generate';
+      intent.isDiagram = true;
+      var kw = text.match(/关于([^，。,。；;！!？?\s]+)/);
+      if (kw && kw[1]) intent.keyword = kw[1];
+      return intent;
+    }
+
+    // 2026-08-18 修复：HTML/网页/可视化类指令同样强制走 contentMd 路径，
+    // 否则「做一个HTML」被队列分类为 edit → LLM 的 ```html 输出被 edit 分支丢弃 → 本地占位提示
+    if (/(?:html|网页|web|页面|交互组件|动画|可视化|仪表盘|dashboard|小组件)/i.test(text)) {
+      intent.type = 'generate';
+      intent.isHtml = true;
+      return intent;
+    }
 
     // 第N点/第N条/第N项 → 目标行下标
     var idxMatch = text.match(/第\s*(\d{1,2})\s*[点条项个]/);
@@ -2151,9 +2172,9 @@ const AIEngine = (function() {
     else if (/复制|拷贝/.test(text)) intent.type = 'copy';
     else if (/粘贴|贴上/.test(text)) intent.type = 'paste';
     else if (/删除|去掉|移除|清除|删掉/.test(text)) intent.type = 'delete';
-    else if (/修改|改成|更新|更正|改为|换成|重排|整理|排序|调整顺序|重新排序/.test(text)) intent.type = 'modify';
+    else if (/修改|改成|更新|更正|改为|换成|重排|排序|调整顺序|重新排序/.test(text)) intent.type = 'modify';
     else if (/补充|增加|添加|加入|新增|补上/.test(text)) intent.type = 'add';
-    else if (/总结|概括|小结|归纳/.test(text)) intent.type = 'summarize';
+    else if (/总结|概括|小结|归纳|整理|梳理/.test(text)) intent.type = 'summarize';
     else if (/翻译|译成|翻译成/.test(text)) intent.type = 'translate';
     else if (/生成|写一篇|写一份|起草/.test(text)) intent.type = 'generate';
 
@@ -2172,13 +2193,17 @@ const AIEngine = (function() {
   }
 
   // 从指令文本提取要补充 / 修改的内容片段（本地规则，确定性）
+  // 2026-08-18 修复：不再激进删除「要点/内容/说明」等可能属于内容的词，
+  // 避免「补充光合作用要点」被提取成空 → 兜底输出「新增要点」这种无意义占位
   function _extractEditContent(text, intentType) {
     var t = String(text || '').trim();
     if (!t) return '';
     if (intentType === 'add') {
-      t = t.replace(/^(请|帮我|麻烦)?\s*(补充|增加|添加|加入|新增|补上)(一点|一些|一个|点|些|个)?/, '');
+      // 只去掉开头礼貌词 + 动作词（含「补一下」「添加一个」这类变体），其余全部保留为内容
+      t = t.replace(/^(请|帮我|麻烦|麻烦你|请帮我|帮我一下)?\s*(补充|增加|添加|加入|新增|补上|补一下|加上|加一条)\s*(一下|一点|一些|一个|条|项|个)?\s*/, '');
       t = t.replace(/^关于/, '').trim();
-      t = t.replace(/(的)?(内容|要点|说明|部分)$/, '').trim();
+      // 仅当剩余是纯空或纯助词时才返回空；「X的要点」「X的内容」等保留为实质内容
+      t = t.replace(/^(的|了|一下|一些|一个|一点)?$/, '');
     } else if (intentType === 'modify') {
       // 把第N点改成XXX / 将第N点改为XXX
       var m = t.match(/(?:把|将)\s*第\s*\d{1,2}\s*[点条项个]\s*(?:改成|改为|换成|更新为)\s*(.+)$/);
@@ -2186,7 +2211,7 @@ const AIEngine = (function() {
       // XXX改成YYY / XXX改为YYY
       var m2 = t.match(/(?:改成|改为|换成|更新为)\s*(.+)$/);
       if (m2 && m2[1]) return m2[1].trim();
-      t = t.replace(/^(请|帮我|麻烦)?\s*(修改|改成|更新|更正|改为|换成|重排|整理|排序|调整顺序|重新排序)/, '');
+      t = t.replace(/^(请|帮我|麻烦|麻烦你|请帮我)?\s*(修改|改成|更新|更正|改为|换成|重排|整理|排序|调整顺序|重新排序)\s*/, '');
       t = t.replace(/^关于/, '').trim();
     }
     t = t.replace(/[。.!！\s]+$/, '').trim();
@@ -2245,7 +2270,11 @@ const AIEngine = (function() {
 
   function _designAdd(structure, intent) {
     var lineIndex = _resolveInsertLine(structure);
-    var content = intent.content || intent.keyword || '新增要点';
+    var content = intent.content || intent.keyword || '';
+    // 2026-08-18 修复：无法提取到实质内容时给出明确提示，而非输出无意义的「新增要点」
+    if (!content) {
+      content = '（请补充要添加的具体内容，例如：补充光合作用的光反应阶段）';
+    }
     var newLine = _nextBulletPrefix(structure) + content;
     return {
       op: 'add',
@@ -2306,13 +2335,50 @@ const AIEngine = (function() {
   // LLM 增强入口：无 API Key 或不可用时返回 null（回退本地规则）
   async function _tryLlmDesignPlan(pageId, structure, cmd) {
     var config = _getConfig();
-    if (!config || !config.apiKey) return null;
-    if (typeof AIAdapter === 'undefined' || !AIAdapter.chat) return null;
+    // 2026-08-18 修复：失败原因可见——不再静默返回 null，改为 { error }，
+    // 让保底内容能明确告知用户"为什么没走通真实 AI"（未配置 Key / 调用失败）
+    if (!config || !config.apiKey) return { error: '未配置 API Key（请打开「AI 配置」填写 Key 并点击「保存设置」）' };
+    if (typeof AIAdapter === 'undefined' || !AIAdapter.chat) return { error: 'AIAdapter 未加载' };
     try {
+      var rawCmd = String(cmd && (cmd.raw || cmd.text) || '');
+      // 2026-08-18 修复：流程图/画图类指令 → 指示 LLM 输出 canvas-diagram 格式 JSON，
+      // 系统随后提取为 @[diagram:ID] 占位符渲染 Canvas 画布（此前 LLM 不知道图数据格式）
+      var isDiagram = /流程图|机制图|概念图|示意图|画图|制图|diagram|flowchart|通路|循环图|路径图|关系图|思维导图|代谢|schematic|pathway/.test(rawCmd);
+      var diagramHint = isDiagram
+        ? '\n【画图/流程图/机制图/示意图/通路图类指令】不修改正文，直接生成图数据：'
+          + '在 contentMd 字段放一个 ```json 代码块（operations 留空数组），格式为：'
+          + '{"nodes":[{"id":"n1","x":150,"y":80,"w":120,"h":40,"text":"节点文本","shape":"rect","color":"#e0f2fe"}],'
+          + '"edges":[{"id":"e1","from":"n1","to":"n2","label":"→","curve":0,"color":"#333"}]}。'
+          + '要求：画布 800×400，坐标不越界；nodes/edges 的 id 连续（n1,n2... / e1,e2...）；'
+          + '每个 edge 的 from/to 必须指向已存在的节点 id；节点文本尽量 12 字内（超长用 \\n 换行）；'
+          + 'shape ∈ rect/circle/diamond；color 用柔和色（#e0f2fe/#fef3c7/#dcfce7/#fce7f3/#e0e7ff/#fed7aa）。'
+          + 'JSON 必须是合法 JSON，代码块单独占一段。'
+        : '';
+      // 2026-08-18 修复：HTML/网页/可视化类指令 → 指示 LLM 输出 ```html 代码块（contentMd 字段），
+      // 系统随后提取为 @[html:ID] 占位符渲染沙盒 iframe（与 canvas-diagram 同机制）
+      var isHtml = /(?:html|网页|web|页面|交互组件|动画|可视化|仪表盘|dashboard|小组件)/i.test(rawCmd);
+      var htmlHint = isHtml
+        ? '\n【HTML/网页/可视化类指令】不修改正文，直接生成一个自包含的 HTML 组件：'
+          + '在 contentMd 字段放一个 ```html 代码块（operations 留空数组），代码块内为完整自包含 HTML'
+          + '（含 <style> 与 <script> 即可，无需 <!DOCTYPE html>/<html> 外壳），'
+          + '要求视觉精美、冷色调、支持交互与动画。代码块单独占一段。'
+        : '';
       var messages = [
         {
           role: 'system',
-          content: '你是医学文献笔记编辑方案设计器。根据指令和文档结构快照输出 JSON，格式：{"reason":"","operations":[{"op":"add|delete|modify|cut|copy|paste"}],"contentMd":null,"bookmarkTitle":""}。只输出 JSON。'
+          content: '你是医学文献笔记编辑方案设计器。根据用户指令和文档结构快照，设计对 Markdown 笔记的编辑操作。只输出 JSON，不要输出任何其它文字。\n'
+            + 'JSON 格式：{"reason":"简述设计理由","operations":[编辑操作...],"contentMd":null,"bookmarkTitle":"操作标题"}\n'
+            + '每个编辑操作支持以下字段（op 必填）：\n'
+            + '1. add（插入）：{"op":"add","lineIndex":行号,"content":"要插入的完整文本内容"}（lineIndex 表示插入到该行之后；省略则插到文末）\n'
+            + '2. modify（替换）：{"op":"modify","fromLine":起始行,"toLine":结束行,"content":"替换后的文本"}\n'
+            + '3. delete（删除）：{"op":"delete","fromLine":起始行,"toLine":结束行}\n'
+            + '4. cut / copy：{"op":"cut","fromLine":起始行,"toLine":结束行} 或 {"op":"copy","fromLine":起始行,"toLine":结束行}\n'
+            + '5. paste：{"op":"paste","lineIndex":行号}\n'
+            + '行号从 0 开始。对于"补充/新增"类指令，应生成 add 操作并填充有意义的实际内容（如补充 X 的要点，内容应是与主题相关的完整句子）。\n'
+            + '如果指令属于问答/总结/翻译（不修改正文），则 operations 留空数组，把回答内容放在 contentMd 字段。'
+            + '特别注意：如果指令是"整理/总结/梳理/归纳"某个主题，但提供的笔记结构中没有实质内容（lines 为空或仅有标题），则应当将该指令理解为"根据主题生成知识点"而非"总结已有内容"——在 contentMd 字段中生成该主题的完整知识点内容。'
+            + diagramHint
+            + htmlHint
         },
         {
           role: 'user',
@@ -2327,11 +2393,18 @@ const AIEngine = (function() {
           })
         }
       ];
-      var text = await AIAdapter.chat(messages, config);
+      // 2026-08-18 修复：AIAdapter.chat 签名是 (provider, baseUrl, apiKey, messages, options)，
+      // 此前误传为 chat(messages, config) 导致参数错位、请求必然失败 → 永远回退本地规则
+      var text = await AIAdapter.chat(
+        config.provider, config.baseUrl, config.apiKey, messages,
+        { model: config.model }
+      );
       var parsed = _extractJson(text);
-      if (!parsed) return null;
+      if (!parsed) return { error: 'AI 返回内容无法解析为 JSON（原始输出前 80 字：' + String(text).trim().slice(0, 80).replace(/\n/g, ' ') + '）' };
       var ops = Array.isArray(parsed) ? parsed : (parsed.operations || parsed.annotations);
-      if (!Array.isArray(ops) || ops.length === 0) return null;
+      if (!Array.isArray(ops)) ops = [];
+      // 2026-08-18 修复：LLM 可产出纯内容（总结/问答/翻译，operations 为空但有 contentMd）
+      if (ops.length === 0 && !parsed.contentMd) return { error: 'AI 返回空结果（无操作也无内容）' };
       return {
         reason: parsed.reason || '',
         operations: ops,
@@ -2339,7 +2412,7 @@ const AIEngine = (function() {
         bookmarkTitle: parsed.bookmarkTitle || ''
       };
     } catch (e) {
-      return null;
+      return { error: (e && e.message) ? e.message : String(e) };
     }
   }
 
@@ -2354,10 +2427,77 @@ const AIEngine = (function() {
     return verb + '操作';
   }
 
-  // 非 edit 类指令：产出 contentMd（进书签，不污染正文）
-  function _buildNonEditContent(intent) {
+  // 非 edit 类指令：产出 contentMd（无 LLM Key 时的本地兜底，保证审批后笔记有可见产出）
+  // 2026-08-18 增强：总结/问答基于正文结构（structure）提取实际要点，避免只输出占位符
+  function _buildNonEditContent(intent, structure) {
     var label = { summarize: '总结', translate: '翻译', generate: '生成', ask: '问答' }[intent.type] || 'AI 成果';
-    return '## ' + label + '\n\n> 原始指令：' + (intent.raw || '') + '\n\n（本地规则引擎尚未接入内容生成，接入 LLM 后将产出完整内容。）';
+    var raw = (intent.raw || '').trim();
+    var clean = String(raw).replace(/[【】《》\[\]{}()]/g, '').trim();
+    var lines = [];
+    lines.push('## ' + label);
+
+    // 从正文结构提取要点（bullet 行 / 小标题），作为本地可用的实质内容
+    var struct = structure || null;
+    var bulletLines = [];
+    var headingLines = [];
+    if (struct && Array.isArray(struct.lines)) {
+      for (var i = 0; i < struct.lines.length; i++) {
+        var ln = String(struct.lines[i] || '').trim();
+        if (!ln) continue;
+        if (struct.bulletLineIndexes && struct.bulletLineIndexes.indexOf(i) >= 0) {
+          bulletLines.push(ln);
+        } else if (struct.headingIndexes && struct.headingIndexes.indexOf(i) >= 0) {
+          headingLines.push(ln.replace(/^#{1,6}\s*/, ''));
+        }
+      }
+    }
+
+    if (intent.type === 'summarize' || intent.type === 'ask') {
+      if (clean) { lines.push(''); lines.push('> 指令：' + clean); }
+      // 有正文要点 → 基于正文生成本地小结；无正文 → 提示
+      if (bulletLines.length || headingLines.length) {
+        lines.push('');
+        lines.push('**本地小结（基于当前笔记内容自动提取）：**');
+        lines.push('');
+        var pick = bulletLines.length ? bulletLines : headingLines;
+        var sample = pick.slice(0, 6);
+        for (var j = 0; j < sample.length; j++) {
+          lines.push('- ' + sample[j].replace(/^[-*]\s*/, ''));
+        }
+        if (pick.length > 6) lines.push('- …等 ' + pick.length + ' 条内容');
+        lines.push('');
+        lines.push('> 提示：配置 API Key 后可获得更深入的 AI 总结。');
+      } else {
+        lines.push('');
+        lines.push('- 当前笔记正文为空或无可提取的要点，暂无法本地生成' + label + '。');
+        lines.push('- 若需完整' + label + '，请在设置中配置 API Key 后重新执行该指令。');
+      }
+    } else if (intent.type === 'generate') {
+      if (clean) { lines.push(''); lines.push('> 指令：' + clean); }
+      // 2026-08-18 修复：generate 类型（含从 summarize 降级而来）本地兜底输出有意义的内容框架，
+      // 让用户在 AI 不可用时也能看到系统理解了指令主题
+      var topic = intent.keyword || '';
+      if (!topic) {
+        var genMatch = clean.match(/(?:整理|总结|概括|归纳|梳理|提炼|生成|写|撰写|创作)\s*(?:一下|下)?\s*(?:关于)?\s*([^，。,；;！!？?\s]+?)(?:的|知识点|内容|要点|说明|介绍)?\s*(?:整理|总结|概括|归纳|梳理|提炼)?\s*$/);
+        if (genMatch && genMatch[1]) topic = genMatch[1];
+      }
+      lines.push('');
+      if (topic) {
+        lines.push('**主题：' + topic + '**');
+        lines.push('');
+        lines.push('- 待 AI 生成：与「' + topic + '」相关的核心知识点与要点。');
+        lines.push('- 结构：核心概念 → 关键机制 → 要点列表 → 总结。');
+      } else {
+        lines.push('- 已记录你的生成请求。');
+        lines.push('- 配置 API Key 后可生成完整内容；当前本地引擎仅记录请求占位。');
+      }
+    } else {
+      if (clean) { lines.push(''); lines.push('> 指令：' + clean); }
+      lines.push('');
+      lines.push('- 已记录你的' + label + '请求，待补充详细内容。');
+      lines.push('- 若需完整' + label + '，请在设置中配置 API Key 后重新执行该指令。');
+    }
+    return lines.join('\n');
   }
 
   // 方案设计公开接口：指令文本 + 结构快照 → 可执行编辑方案
@@ -2376,8 +2516,29 @@ const AIEngine = (function() {
     if (!structure) structure = await analyzeStructure(pageId);
 
     var intent = _inferEditIntent(raw);
+    // 2026-08-18 修复：summarize 类型 + 正文无要点 → 降级为 generate，让 AI 根据指令主题生成内容
+    // 解决「整理指令但笔记为空时 AI 无法产出任何内容」的问题
+    if (intent.type === 'summarize') {
+      var structLines = (structure && Array.isArray(structure.lines)) ? structure.lines : [];
+      var hasBulletPoints = (structure && Array.isArray(structure.bulletLineIndexes) && structure.bulletLineIndexes.length > 0);
+      var hasHeadings = (structure && Array.isArray(structure.headingIndexes) && structure.headingIndexes.length > 0);
+      var hasSubstance = false;
+      for (var si = 0; si < structLines.length; si++) {
+        var sl = String(structLines[si] || '').trim();
+        if (sl && sl.length >= 4 && !/^#+\s*$/.test(sl)) { hasSubstance = true; break; }
+      }
+      if (!hasBulletPoints && !hasHeadings && !hasSubstance) {
+        intent.type = 'generate';
+        intent.keyword = intent.keyword || '';
+        // 从指令中提取主题关键词（如"三羧酸循环"）
+        var topicMatch = raw.match(/(?:整理|总结|概括|归纳|梳理|提炼)\s*(?:一下|下)?\s*(?:关于)?\s*([^，。,；;！!？?\s]+?)(?:的|知识点|内容|要点|说明|介绍)?\s*(?:整理|总结|概括|归纳|梳理|提炼)?\s*$/);
+        if (topicMatch && topicMatch[1]) intent.keyword = topicMatch[1];
+      }
+    }
     var editOps = ['add', 'delete', 'modify', 'cut', 'copy', 'paste'];
-    var isEdit = (cmdType === 'edit' || editOps.indexOf(intent.type) >= 0);
+    // 2026-08-18 修复：流程图/画图类及 HTML/可视化类指令即使被队列分类为 edit，也强制走非 edit（contentMd）路径，
+    // 否则 LLM 生成的图数据（contentMd 字段）会被 edit 分支丢弃 → 只能产出本地兜底文本
+    var isEdit = !intent.isDiagram && !intent.isHtml && (cmdType === 'edit' || editOps.indexOf(intent.type) >= 0);
 
     var plan = {
       reason: '',
@@ -2409,9 +2570,35 @@ const AIEngine = (function() {
         plan.operations = llm.operations;
         if (llm.reason) plan.reason = llm.reason;
         if (llm.bookmarkTitle) plan.bookmarkTitle = llm.bookmarkTitle;
+      } else if (llm && llm.error) {
+        plan.aiError = llm.error;
+        // 2026-08-18 修复：编辑类指令 LLM 调用失败时，把失败原因追加到本地兜底操作末尾，
+        // 让用户明确知道「真实 AI 未连通」（此前只显示保底内容，误以为从未调用 AI）
+        if (Array.isArray(plan.operations) && plan.operations.length) {
+          var lastOp = plan.operations[plan.operations.length - 1];
+          if (lastOp && lastOp.content) {
+            lastOp.content = lastOp.content + '\n\n> ⚠ AI 未连接：' + llm.error;
+          }
+        }
       }
     } else {
-      plan.contentMd = _buildNonEditContent(intent);
+      plan.contentMd = _buildNonEditContent(intent, structure);
+      // 2026-08-18 修复：非 edit 指令（总结/问答/翻译/生成）同样尝试 LLM 产出真实内容，
+      // LLM 的 contentMd 优先于本地占位文本；operations 为空时也允许（纯内容产出）
+      try {
+        var llm2 = await _tryLlmDesignPlan(pageId, structure, cmd);
+        if (llm2 && llm2.contentMd) {
+          plan.contentMd = llm2.contentMd;
+          if (llm2.reason) plan.reason = llm2.reason;
+          if (llm2.bookmarkTitle) plan.bookmarkTitle = llm2.bookmarkTitle;
+        } else if (llm2 && llm2.error) {
+          plan.aiError = llm2.error;
+        }
+      } catch (e) { /* LLM 失败回退本地占位 */ }
+      // 2026-08-18 修复：AI 未联通时，在保底内容末尾明确写出失败原因（避免"无声保底"）
+      if (plan.aiError) {
+        plan.contentMd = (plan.contentMd || '') + '\n\n> ⚠ AI 未连接：' + plan.aiError;
+      }
     }
 
     if (!plan.reason) plan.reason = _buildReason(intent, plan.operations);
@@ -2452,7 +2639,8 @@ const AIEngine = (function() {
 
     switch (op.op) {
       case 'add': {
-        var pos = _clampPos((op.lineIndex || 0) + 1, len);
+        // 2026-08-18 修复：lineIndex 省略时插入文末（与 LLM prompt 契约一致），而非固定插到第 1 行
+        var pos = (typeof op.lineIndex === 'number') ? _clampPos(op.lineIndex + 1, len) : len;
         var addLines = _splitLines(op.content || '');
         ls.splice(pos, 0, ...addLines);
         break;
@@ -2533,6 +2721,71 @@ const AIEngine = (function() {
     return _joinLines(lines);
   }
 
+  // ============================================================
+  // 统一写回入口：落盘 DataLayer + 同步 Notebook 内存 page.mdContent + CodeMirror + 重渲染
+  // 2026-08-18 修复：此前只调 DataLayer.putPageMd 导致「数据库变了但 UI 不刷新」
+  // （renderPage 渲染的是内存 page.mdContent，未同步则永远显示旧内容）
+  // ============================================================
+  // 流程图/HTML 占位符物化：把 AI 输出的 ```json（nodes/edges 图数据）与 ```html 代码块
+  // 提取为独立存储，原位替换为 @[diagram:ID] / @[html:ID] 占位符，恢复 Canvas 画布与沙盒 iframe 渲染链路。
+  // 2026-08-18 修复：canvas-diagram / html-design skill 声称"系统自动提取"，但此前无任何实现，
+  // 导致流程图/HTML 指令的输出是纯文本代码块而非可视化组件。
+  function _materializeDiagrams(md) {
+    if (!md || String(md).indexOf('```') < 0) return md;
+    if (typeof Notebook === 'undefined') return md;
+    var out = String(md);
+    // 1) ```json（nodes/edges 图数据）→ @[diagram:ID]（canvas-diagram）
+    if (Notebook.createDiagramRef && Notebook.saveDiagram) {
+      out = out.replace(/```(?:json|JSON)?\s*\n?([\s\S]*?)```/g, function(m, body) {
+        if (!body || !body.trim()) return m;
+        var data = null;
+        try { data = JSON.parse(body.trim()); } catch (e) { data = null; }
+        // 严格校验：必须同时含 nodes 与 edges 数组且有节点，才视为 canvas-diagram 图数据
+        if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges) || data.nodes.length === 0) return m;
+        var ref = Notebook.createDiagramRef(); // 返回 @[diagram:ID]，空数据已落盘
+        var idMatch = /^@\[diagram:([A-Za-z0-9_\-]+)\]$/.exec(ref);
+        if (!idMatch) return m;
+        Notebook.saveDiagram(idMatch[1], data);
+        return ref;
+      });
+    }
+    // 2) ```html 代码块 → @[html:ID]（沙盒 iframe 组件，html-design）
+    if (Notebook.createHtmlRef) {
+      out = out.replace(/```\s*html\s*\n?([\s\S]*?)```/gi, function(m, body) {
+        if (!body || !body.trim()) return m;
+        return Notebook.createHtmlRef(body);
+      });
+    }
+    return out;
+  }
+
+  async function _persistPageMd(pageId, newMd) {
+    newMd = (newMd == null) ? '' : String(newMd);
+    // 流程图 JSON 代码块 → @[diagram:ID] 占位符（统一入口，edit 与 contentMd 两条写回路径都覆盖）
+    newMd = _materializeDiagrams(newMd);
+    var done = false;
+    // 1) 落盘
+    if (typeof DataLayer !== 'undefined' && DataLayer.putPageMd) {
+      try { await DataLayer.putPageMd(pageId, newMd); done = true; } catch (e) {}
+    }
+    // 2) 统一入口：Notebook.setPageMd（内部 = putPageMd + syncPageMd + CodeMirror 注入 + renderPage）
+    if (typeof Notebook !== 'undefined') {
+      if (Notebook.setPageMd) {
+        try { await Notebook.setPageMd(pageId, newMd); return done || true; } catch (e) {}
+      }
+      // 3) 兜底：内存同步 + 重渲染
+      if (Notebook.syncPageMd) { try { Notebook.syncPageMd(pageId, newMd); } catch (e) {} }
+      if (Notebook.renderPage) {
+        var currentId = null;
+        if (Notebook.getCurrentPageId) { try { currentId = Notebook.getCurrentPageId(); } catch (e) { currentId = null; } }
+        if (currentId === null || currentId === pageId) {
+          try { await Notebook.renderPage(pageId); } catch (e) {}
+        }
+      }
+    }
+    return done;
+  }
+
   // edit 执行器公开接口：方案 → 变更后的 mdContent + diff
   async function applyEdit(pageId, plan) {
     // 快照优先：异步队列执行时 plan.oldMd 来自入队快照 noteMd，避免与实时正文（可能已被用户后续编辑）错位
@@ -2553,24 +2806,9 @@ const AIEngine = (function() {
       try { diff = DiffEngine.diffLines(oldMd, newMd); } catch (e) { diff = []; }
     }
 
-    // 写回
-    var written = false;
-    if (typeof DataLayer !== 'undefined' && DataLayer.putPageMd) {
-      await DataLayer.putPageMd(pageId, newMd);
-      written = true;
-    }
-
-    // 重渲染（当前页或无法确定当前页时触发）
-    var rendered = false;
-    if (typeof Notebook !== 'undefined' && Notebook.renderPage) {
-      var currentId = null;
-      if (Notebook.getCurrentPageId) { try { currentId = Notebook.getCurrentPageId(); } catch (e) { currentId = null; } }
-      if (currentId === null || currentId === pageId) {
-        try { await Notebook.renderPage(pageId); rendered = true; } catch (e) { rendered = false; }
-      }
-    }
-
-    return { oldMd: oldMd, newMd: newMd, diff: diff, written: written, rendered: rendered };
+    // 写回（落盘 + 同步内存 + 重渲染）
+    var written = await _persistPageMd(pageId, newMd);
+    return { oldMd: oldMd, newMd: newMd, diff: diff, written: written, rendered: written };
   }
 
   // 正则特殊字符转义（供指令句兜底匹配）
@@ -2578,18 +2816,31 @@ const AIEngine = (function() {
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  // 从 mdContent 中删除指令句（、、{raw}。。）：优先按入队时记录的完整原文 mark 精确删除，
-  // 兜底用正则匹配（raw 转义）；删除后清理因移除产生的多余空行。
+  // 从 mdContent 中删除指令句：优先按入队时记录的完整原文 mark 精确删除，
+  // 兜底用多符号联合正则匹配（从 CommandQueue.getDelimiters() 读取当前生效配置）；删除后清理多余空行。
   function _stripCommandMark(md, cmd) {
     if (!md || !cmd || !cmd.raw) return md;
     var out = md;
     if (cmd.mark) {
       out = out.split(cmd.mark).join('');
     }
-    if (out.indexOf('、、') >= 0) {
-      var re = new RegExp('、、\\s*' + _escapeRegExp(cmd.raw) + '\\s*。。', 'g');
-      out = out.replace(re, '');
-    }
+    // 兜底：遍历所有 open × close 组合，尝试匹配并删除
+    try {
+      var d = null;
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.getDelimiters) d = CommandQueue.getDelimiters();
+      var openArr  = (d && d.open)  ? (Array.isArray(d.open)  ? d.open  : [d.open])  : ['、、', '/', '@ai ', '↺'];
+      var closeArr = (d && d.close) ? (Array.isArray(d.close) ? d.close : [d.close]) : ['。。', '...', '。。。'];
+      function _esc(s) { return String(s).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
+      var escapedRaw = _esc(cmd.raw);
+      for (var i = 0; i < openArr.length; i++) {
+        var op = openArr[i];
+        for (var j = 0; j < closeArr.length; j++) {
+          var cl = closeArr[j];
+          var re = new RegExp(_esc(op) + '\\s*' + escapedRaw + '\\s*' + _esc(cl), 'g');
+          out = out.replace(re, '');
+        }
+      }
+    } catch (e) { /* 正则失败时静默，不影响已有精确删除 */ }
     out = out.replace(/\n{3,}/g, '\n\n');
     return out;
   }
@@ -2657,6 +2908,26 @@ const AIEngine = (function() {
           operations: plan.operations
         });
       } else {
+        // 2026-08-18 修复：非 edit 指令同样把 contentMd 写入笔记正文（指令句后插入）
+        var contentMd2 = plan.contentMd || '';
+        if (contentMd2) {
+          try {
+            // 2026-08-18 修复：插入基线优先取「当前最新正文」，避免多任务基于同一快照互相覆盖
+            var mdBase2 = '';
+            if (typeof DataLayer !== 'undefined' && DataLayer.getPageMd) {
+              try { mdBase2 = await DataLayer.getPageMd(pageId) || ''; } catch (e) { mdBase2 = ''; }
+            }
+            if (!mdBase2 && snapshot && snapshot.noteMd !== undefined) mdBase2 = snapshot.noteMd;
+            var insertPos2 = mdBase2.length;
+            var mark2 = cmd.mark || '';
+            var markIdx2 = mark2 ? mdBase2.indexOf(mark2) : -1;
+            if (markIdx2 >= 0) insertPos2 = markIdx2 + mark2.length;
+            var sep2 = (insertPos2 > 0 && mdBase2.charAt(insertPos2 - 1) !== '\n') ? '\n\n' : '\n';
+            var newMd2 = mdBase2.slice(0, insertPos2) + sep2 + contentMd2 + mdBase2.slice(insertPos2);
+            await _persistPageMd(pageId, newMd2);
+            result = { newMd: newMd2 };
+          } catch (e) { /* 写回失败不影响书签落库 */ }
+        }
         bookmark = await _emitBookmark(pageId, {
           type: cmd.type || 'ask',
           reason: plan.reason,
@@ -2671,14 +2942,7 @@ const AIEngine = (function() {
           var curMd = await DataLayer.getPageMd(pageId);
           var cleaned = _stripCommandMark(curMd, cmd);
           if (cleaned !== curMd) {
-            await DataLayer.putPageMd(pageId, cleaned);
-            if (typeof Notebook !== 'undefined' && Notebook.renderPage) {
-              var currentId = null;
-              if (Notebook.getCurrentPageId) { try { currentId = Notebook.getCurrentPageId(); } catch (e) { currentId = null; } }
-              if (currentId === null || currentId === pageId) {
-                try { await Notebook.renderPage(pageId); } catch (e) {}
-              }
-            }
+            await _persistPageMd(pageId, cleaned);
           }
         } catch (e) { /* 指令句清理失败不影响主流程 */ }
       }
@@ -2699,6 +2963,232 @@ const AIEngine = (function() {
       }
       throw e;
     }
+  }
+
+  // ============================================================
+  // 2026-08-15 统一策略流（对应 CommandQueue 调度器消费）
+  // 阶段 1/3：generateStrategy — 生成编辑计划 + 快照基线，状态 pending→strategizing→awaiting_approval
+  // 阶段 2/3：applyApprovedPlan — 用户审批通过后实际 applyEdit，状态 awaiting_approval→approved→applying→done
+  // 阶段 3/3：rollback/rollforward — 撤回 / 取消撤回（用 preApprovalMd / postApplyMd 回写笔记）
+  // redesignStrategy 等价于 resetToPending，让调度器重新 generateStrategy
+  // ============================================================
+  async function generateStrategy(cmd) {
+    if (!cmd || !cmd.id) return null;
+    var cmdId = cmd.id;
+    try {
+      // 1. strategizing
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.markStrategizing) {
+        try { await CommandQueue.markStrategizing(cmdId); } catch (e) {}
+      }
+      // 2. 确定 pageId
+      var pageId = cmd.pageId;
+      if (!pageId && typeof Notebook !== 'undefined' && Notebook.getCurrentPageId) {
+        try { pageId = Notebook.getCurrentPageId(); } catch (e) { pageId = null; }
+      }
+      if (!pageId) {
+        // 无 pageId 的指令保守标记失败（不知道修改哪页笔记）
+        if (typeof CommandQueue !== 'undefined' && CommandQueue.markFailed) {
+          try { await CommandQueue.markFailed(cmdId, '未关联笔记页（缺少 pageId），无法生成策略'); } catch (e2) {}
+        }
+        return { command: cmd, error: '缺少 pageId' };
+      }
+      // 3. 基于快照 or 实时分析结构
+      var snapshot = cmd.snapshot || null;
+      var structure = await analyzeStructure(pageId, snapshot ? snapshot.noteMd : null);
+      cmd.structure = structure;
+      // 4. 生成 plan
+      var plan = await designEditPlan(pageId, cmd);
+      // 5. 基线快照：preApprovalMd（入队时的笔记正文），供撤回回退
+      var preApprovalMd = '';
+      if (snapshot && typeof snapshot.noteMd === 'string') {
+        preApprovalMd = snapshot.noteMd;
+      } else if (typeof DataLayer !== 'undefined' && DataLayer.getPageMd) {
+        try { preApprovalMd = await DataLayer.getPageMd(pageId) || ''; } catch (e) { preApprovalMd = ''; }
+      }
+      // 6. awaiting_approval
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.markAwaitingApproval) {
+        try {
+          await CommandQueue.markAwaitingApproval(cmdId, {
+            plan: plan,
+            preApprovalMd: preApprovalMd,
+            pageId: pageId
+          });
+        } catch (e) {}
+      }
+      return { command: cmd, plan: plan, pageId: pageId };
+    } catch (e) {
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.markFailed) {
+        try { await CommandQueue.markFailed(cmdId, e && e.message ? e.message : String(e)); } catch (e2) {}
+      }
+      throw e;
+    }
+  }
+
+  async function applyApprovedPlan(cmdId) {
+    if (!cmdId) throw new Error('applyApprovedPlan 需要 cmdId');
+    var cmd = null;
+    if (typeof CommandQueue !== 'undefined' && CommandQueue.getCommand) {
+      try { cmd = await CommandQueue.getCommand(cmdId); } catch (e) { cmd = null; }
+    }
+    if (!cmd && typeof DataLayer !== 'undefined' && DataLayer.getCommand) {
+      try { cmd = await DataLayer.getCommand(cmdId); } catch (e) { cmd = null; }
+    }
+    if (!cmd) throw new Error('指令不存在：' + cmdId);
+
+    var pageId = cmd.pageId;
+    if (!pageId) throw new Error('指令缺少 pageId：' + cmdId);
+
+    try {
+      // approved → applying
+      if (typeof CommandQueue !== 'undefined') {
+        if (CommandQueue.markApproved) { try { await CommandQueue.markApproved(cmdId); } catch (e) {} }
+        if (CommandQueue.markApplying) { try { await CommandQueue.markApplying(cmdId); } catch (e) {} }
+      }
+
+      var plan = cmd.plan || {};
+      var snapshot = cmd.snapshot || null;
+      var isEdit = (Array.isArray(plan.operations) && plan.operations.length > 0);
+      var result = {};
+      var bookmark = null;
+
+      if (isEdit) {
+        // 2026-08-18 修复：基线优先取「当前最新正文」而非冻结快照 preApprovalMd——
+        // 多任务基于同一冻结快照先后执行时，后执行会覆盖先执行的结果。
+        // 读最新正文后行号可能相对策略设计时刻偏移，但 applyEdit 内部有 clamp 保护，内容不丢。
+        plan.oldMd = '';
+        if (typeof DataLayer !== 'undefined' && DataLayer.getPageMd) {
+          try { plan.oldMd = await DataLayer.getPageMd(pageId) || ''; } catch (e) { plan.oldMd = ''; }
+        }
+        if (!plan.oldMd && cmd.preApprovalMd) plan.oldMd = String(cmd.preApprovalMd);
+        result = await applyEdit(pageId, plan);
+        bookmark = await _emitBookmark(pageId, {
+          type: 'edit',
+          diff: result.diff,
+          reason: plan.reason,
+          bookmarkTitle: plan.bookmarkTitle,
+          operations: plan.operations
+        });
+      } else {
+        // 2026-08-18 修复：非 edit 指令（总结/问答/翻译/生成）审批通过后，
+        // 把 AI 产出 contentMd 真正写入笔记正文（指令句之后插入），而不是只落书签
+        var contentMd = plan.contentMd || '';
+        if (contentMd) {
+          try {
+            // 2026-08-18 修复：插入基线优先取「当前最新正文」，避免多任务基于同一冻结快照互相覆盖
+            var mdBase = '';
+            if (typeof DataLayer !== 'undefined' && DataLayer.getPageMd) {
+              try { mdBase = await DataLayer.getPageMd(pageId) || ''; } catch (e) { mdBase = ''; }
+            }
+            if (!mdBase && cmd.preApprovalMd) mdBase = String(cmd.preApprovalMd);
+            var insertPos = mdBase.length;
+            var mark = cmd.mark || '';
+            var markIdx = mark ? mdBase.indexOf(mark) : -1;
+            if (markIdx >= 0) insertPos = markIdx + mark.length;
+            var sep = (insertPos > 0 && mdBase.charAt(insertPos - 1) !== '\n') ? '\n\n' : '\n';
+            var newMd = mdBase.slice(0, insertPos) + sep + contentMd + mdBase.slice(insertPos);
+            await _persistPageMd(pageId, newMd);
+            result = { newMd: newMd };
+          } catch (e) { /* 写回失败不影响书签落库 */ }
+        }
+        bookmark = await _emitBookmark(pageId, {
+          type: cmd.type || 'ask',
+          reason: plan.reason,
+          bookmarkTitle: plan.bookmarkTitle,
+          contentMd: plan.contentMd
+        });
+      }
+
+      // 从笔记正文里删除指令句（不污染正文）
+      if (cmd.raw) {
+        try {
+          var curMd = await DataLayer.getPageMd(pageId);
+          var cleaned = _stripCommandMark(curMd, cmd);
+          if (cleaned !== curMd) {
+            await _persistPageMd(pageId, cleaned);
+          }
+        } catch (e) { /* 清理失败不影响结果 */ }
+      }
+
+      // done （附 postApplyMd + diff + bookmarkId，供撤回/取消撤回回写）
+      var postApplyMd = '';
+      try { postApplyMd = await DataLayer.getPageMd(pageId) || ''; } catch (e) { postApplyMd = ''; }
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.markDone) {
+        try {
+          await CommandQueue.markDone(cmdId, {
+            postApplyMd: postApplyMd,
+            diff: result.diff || null,
+            bookmarkId: bookmark && bookmark.id ? bookmark.id : null
+          });
+        } catch (e) {}
+      }
+
+      return {
+        command: cmd,
+        pageId: pageId,
+        plan: plan,
+        result: result,
+        bookmark: bookmark
+      };
+    } catch (e) {
+      if (typeof CommandQueue !== 'undefined' && CommandQueue.markFailed) {
+        try { await CommandQueue.markFailed(cmdId, e && e.message ? e.message : String(e)); } catch (e2) {}
+      }
+      throw e;
+    }
+  }
+
+  async function redesignStrategy(cmdId) {
+    // 重置为 pending，调度器会重新消费 → generateStrategy
+    if (typeof CommandQueue !== 'undefined' && CommandQueue.resetToPending) {
+      return await CommandQueue.resetToPending(cmdId);
+    }
+    return null;
+  }
+
+  async function rollbackCommand(cmdId) {
+    if (!cmdId) throw new Error('rollbackCommand 需要 cmdId');
+    var cmd = null;
+    if (typeof CommandQueue !== 'undefined' && CommandQueue.getCommand) {
+      try { cmd = await CommandQueue.getCommand(cmdId); } catch (e) { cmd = null; }
+    }
+    if (!cmd && typeof DataLayer !== 'undefined' && DataLayer.getCommand) {
+      try { cmd = await DataLayer.getCommand(cmdId); } catch (e) { cmd = null; }
+    }
+    if (!cmd) throw new Error('指令不存在，无法撤回：' + cmdId);
+    var pageId = cmd.pageId;
+    if (!pageId) throw new Error('指令缺少 pageId，无法撤回：' + cmdId);
+
+    var preMd = (cmd.preApprovalMd !== undefined && cmd.preApprovalMd !== null) ? String(cmd.preApprovalMd) : null;
+    if (preMd === null) throw new Error('缺少基线快照 preApprovalMd，无法撤回：' + cmdId);
+
+    await _persistPageMd(pageId, preMd);
+    if (typeof CommandQueue !== 'undefined' && CommandQueue.markRolledBack) {
+      try { await CommandQueue.markRolledBack(cmdId); } catch (e) {}
+    }
+    return true;
+  }
+
+  async function rollforwardCommand(cmdId) {
+    if (!cmdId) throw new Error('rollforwardCommand 需要 cmdId');
+    var cmd = null;
+    if (typeof CommandQueue !== 'undefined' && CommandQueue.getCommand) {
+      try { cmd = await CommandQueue.getCommand(cmdId); } catch (e) { cmd = null; }
+    }
+    if (!cmd && typeof DataLayer !== 'undefined' && DataLayer.getCommand) {
+      try { cmd = await DataLayer.getCommand(cmdId); } catch (e) { cmd = null; }
+    }
+    if (!cmd) throw new Error('指令不存在，无法取消撤回：' + cmdId);
+    var pageId = cmd.pageId;
+    if (!pageId) throw new Error('指令缺少 pageId，无法取消撤回：' + cmdId);
+
+    var postMd = (cmd.postApplyMd !== undefined && cmd.postApplyMd !== null) ? String(cmd.postApplyMd) : null;
+    if (postMd === null) throw new Error('缺少执行结果快照 postApplyMd，无法取消撤回：' + cmdId);
+
+    await _persistPageMd(pageId, postMd);
+    if (typeof CommandQueue !== 'undefined' && CommandQueue.markRollforwardDone) {
+      try { await CommandQueue.markRollforwardDone(cmdId); } catch (e) {}
+    }
+    return true;
   }
 
   // ============================================================
@@ -2728,6 +3218,12 @@ const AIEngine = (function() {
     designEditPlan: designEditPlan,
     applyEdit: applyEdit,
     _emitBookmark: _emitBookmark,
-    runCommand: runCommand
+    runCommand: runCommand,
+    // 2026-08-15 统一策略流：生成策略 / 审批执行 / 重新设计 / 撤回与取消撤回
+    generateStrategy: generateStrategy,
+    applyApprovedPlan: applyApprovedPlan,
+    redesignStrategy: redesignStrategy,
+    rollbackCommand: rollbackCommand,
+    rollforwardCommand: rollforwardCommand
   };
 })();

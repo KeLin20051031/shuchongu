@@ -92,7 +92,9 @@ const MDConverter = (function() {
           md += '[' + inlineToMarkdown(child) + '](' + (child.getAttribute('href') || '') + ')';
           break;
         case 'img':
-          md += '![' + (child.getAttribute('alt') || '') + '](' + (child.getAttribute('src') || '') + ')';
+          // 优先 data-src（笔记图片 scimg:// 引用），否则回退 src（普通图片）
+          md += '![' + (child.getAttribute('alt') || '') + ']('
+            + (child.getAttribute('data-src') || child.getAttribute('src') || '') + ')';
           break;
         case 'br':
           md += '\n';
