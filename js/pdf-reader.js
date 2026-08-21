@@ -339,7 +339,8 @@ const PDFReader = (function() {
       _updatePageInfo();
 
       // 重绘标注层：renderTask 完成时 canvas 已就位，getBoundingClientRect 精确
-      if (typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
+      // 关键修复：仅当当前页码仍等于本次渲染页码时才对齐，避免翻页/缩放竞态下旧任务覆盖新页标注
+      if (currentPageNum === pageNum && typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
         try {
           var canvasRect = canvas.getBoundingClientRect();
           var viewportRect = container.getBoundingClientRect();
@@ -356,7 +357,7 @@ const PDFReader = (function() {
       renderTask = null;
       if (err && err.name === 'RenderingCancelledException') return;
 
-      if (typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
+      if (currentPageNum === pageNum && typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
         try {
           var cr = canvas.getBoundingClientRect();
           var vr = container.getBoundingClientRect();
@@ -423,7 +424,8 @@ const PDFReader = (function() {
     }
 
     // 文本层渲染完成后，重新对齐标注层（文本层 DOM 插入可能导致画布位置微调）
-    if (typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
+    // 关键修复：翻页竞态下旧文本层完成时不覆盖当前页标注
+    if (currentPageNum === pageNum && typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
       try {
         var cr2 = canvas.getBoundingClientRect();
         var vr2 = container.getBoundingClientRect();
@@ -1005,14 +1007,27 @@ const PDFReader = (function() {
             var cc = document.getElementById('pdfCanvasContainer');
             if (can && cc && typeof want === 'number') {
               var ratio = want / ((typeof scale === 'number') ? scale : 1);
-              can.style.transformOrigin = 'center top';
+              var tOrigin = 'center top';
+              can.style.transformOrigin = tOrigin;
               can.style.transition = 'transform .08s linear';
               can.style.transform = 'scale(' + ratio + ')';
+              // 关键修复：同步缩放标注层与文本层，避免缩放防抖期间划重点层与 PDF 层错位
+              ['pdfAnnotateLayer','pdfFloatingNotesLayer','pdfTextLayer'].forEach(function(aid) {
+                var ael = document.getElementById(aid);
+                if (!ael) return;
+                ael.style.transformOrigin = tOrigin;
+                ael.style.transition = 'transform .08s linear';
+                ael.style.transform = 'scale(' + ratio + ')';
+              });
             }
             if (_zoomWheelDebounceTimer) clearTimeout(_zoomWheelDebounceTimer);
             _zoomWheelDebounceTimer = setTimeout(function() {
               _zoomWheelDebounceTimer = null;
               if (can) { can.style.transition = ''; can.style.transform = ''; }
+              ['pdfAnnotateLayer','pdfFloatingNotesLayer','pdfTextLayer'].forEach(function(aid) {
+                var ael = document.getElementById(aid);
+                if (ael) { ael.style.transition = ''; ael.style.transform = ''; }
+              });
               setZoom(want).catch(function(e){ console.warn('滚轮缩放重绘失败:', e); });
             }, 140);
           }

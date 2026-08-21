@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -41,6 +41,47 @@
             <span class="mt-line"><span class="mt-num">2026</span> 生日快乐</span>
           </h1>
           <p class="message-desc">本项目 2026 年 7 月末开始动工，主要 AI 编程，以搭建 AI 与笔记的最后一步为设计核心，项目持续改进中。如果有兴趣一起参与，可以拍拍我。</p>
+        </div>
+        <!-- 寄语 · 密码门禁：解锁后才能进入 书架/阅读/笔记/附件 -->
+        <div class="message-gate" id="messageGate">
+          <div class="gate-box">
+            <div class="gate-title">🔒 进入书虫蛊</div>
+            <p class="gate-tip">验证通过后可进入 书架 / 阅读 / 笔记 / 附件</p>
+            <div class="gate-tabs">
+              <button class="gate-tab active" data-gate="birth" type="button">📅 生日验证</button>
+              <button class="gate-tab" data-gate="pwd" type="button">🔑 管理员密码</button>
+            </div>
+            <div class="gate-pane" data-pane="birth">
+              <p class="gate-q">lyn 的农历生日是几月几日？</p>
+              <div class="gate-row">
+                <input id="gateBirthMonth" class="gate-input" type="number" min="1" max="12" placeholder="月">
+                <span class="gate-sep">月</span>
+                <input id="gateBirthDay" class="gate-input" type="number" min="1" max="31" placeholder="日">
+                <span class="gate-sep">日</span>
+                <button id="btnGateBirth" class="gate-btn" type="button">解锁</button>
+              </div>
+            </div>
+            <div class="gate-pane" data-pane="pwd" style="display:none">
+              <div class="gate-row">
+                <input id="gatePwd" class="gate-input gate-pwd-input" type="password" placeholder="输入管理员密码">
+                <button id="btnGatePwd" class="gate-btn" type="button">解锁</button>
+              </div>
+            </div>
+            <div class="gate-msg" id="gateMsg"></div>
+            <div class="gate-locked-row" id="gateLockedRow" style="display:none">
+              <span class="gate-unlocked-tag">✅ 已解锁</span>
+              <button id="btnGateLock" class="gate-link-btn" type="button">🔒 重新锁定</button>
+              <button id="btnGateChange" class="gate-link-btn" type="button">修改管理员密码</button>
+            </div>
+            <div class="gate-change-pane" id="gateChangePane" style="display:none">
+              <input id="gateOldPwd" class="gate-input" type="password" placeholder="旧密码">
+              <input id="gateNewPwd" class="gate-input" type="password" placeholder="新密码（至少 4 位）">
+              <div class="gate-row">
+                <button id="btnGateChangeSave" class="gate-btn" type="button">保存新密码</button>
+                <button id="btnGateChangeCancel" class="gate-btn gate-btn-ghost" type="button">取消</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

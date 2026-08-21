@@ -1862,6 +1862,35 @@ var PageAgent = (function() {
   // 工具清单（OpenAI/DeepSeek 兼容 JSON Schema）
   // 新增工具只需在这里加一条：{type, function: {name, description, parameters, required}, handler}
   function _getToolDefinitions() {
+    // 附件/参考资料工具通用：解析当前教材 ID
+    function _paCurrentBookId() {
+      try {
+        if (typeof Notebook !== 'undefined' && Notebook.getNotebook) {
+          var nb = Notebook.getNotebook();
+          if (nb && (nb.pdfId || nb.bookId)) return nb.pdfId || nb.bookId;
+        }
+      } catch (e) {}
+      try { if (typeof window !== 'undefined' && window.__curBookId) return window.__curBookId; } catch (e) {}
+      try { return _hmCurrentBookId(); } catch (e) {}
+      return null;
+    }
+    // 把一段文本"捕获"（追加）到当前笔记页，返回结果文案
+    function _paCaptureToNote(title, text, metaLine) {
+      if (typeof Notebook === 'undefined' || !Notebook.getCurrentPageId) throw new Error('笔记模块不可用');
+      var pageId = Notebook.getCurrentPageId();
+      if (!pageId) throw new Error('当前没有打开的笔记页');
+      var header = '\n\n---\n\n## 📎 ' + String(title || '捕获内容') + '\n\n';
+      var footer = metaLine ? ('\n> ' + metaLine) : '';
+      var append = header + String(text || '').trim() + footer;
+      var curMd = '';
+      if (typeof Notebook.getPageMdDirect === 'function') { try { curMd = Notebook.getPageMdDirect(pageId) || ''; } catch (e) {} }
+      if (!curMd && typeof Notebook.getPageMd === 'function') { try { curMd = Notebook.getPageMd(pageId) || ''; } catch (e) {} }
+      var newMd = (curMd || '') + append;
+      if (typeof DataLayer !== 'undefined' && DataLayer.putPageMd) DataLayer.putPageMd(pageId, newMd);
+      if (typeof Notebook.syncPageMd === 'function') { try { Notebook.syncPageMd(pageId, newMd); } catch (e) {} }
+      if (typeof Notebook.renderPage === 'function') { try { Notebook.renderPage(pageId); } catch (e) {} }
+      return '✅ 已把「' + title + '」捕获到当前笔记页。';
+    }
     var builtIn = [
       // -------------------- PDF 阅读器控制 --------------------
       {
@@ -4400,6 +4429,188 @@ var PageAgent = (function() {
           HarnessMemory.del(args.key, args.namespace);
           return '✅ 已删除 harness 记忆（namespace=' + (args.namespace || '当前书') + ', key=' + args.key + '）';
         }
+      },
+      // -------------------- 参考资料（ReferenceManager） --------------------
+      {
+        type: 'function',
+        function: {
+          name: 'ref_list',
+          description: '列出当前教材（参考资料空间）下的所有参考资料：名称、ID、格式、字数。用户问"有哪些参考资料/参考材料"、或要基于参考资料回答时，先调用它。',
+          parameters: { type: 'object', properties: {}, required: [] }
+        },
+        requiresApproval: false,
+        handler: function() {
+          if (typeof ReferenceManager === 'undefined' || !ReferenceManager.list) throw new Error('ReferenceManager 不可用');
+          var bookId = _paCurrentBookId();
+          if (!bookId) throw new Error('当前未打开任何教材，无法获取参考资料');
+          return Promise.resolve(ReferenceManager.list(bookId)).then(function(mats) {
+            if (!mats || !mats.length) return '当前教材下没有参考资料。';
+            var lines = mats.map(function(m) {
+              var chars = (m.chars != null) ? m.chars : String(m.md || '').length;
+              return '- ' + (m.name || m.title || m.id) + '（ID:' + m.id + '，' + (m.typeCategory || m.sourceType || '?') + '，' + chars + '字）';
+            });
+            return '当前教材共有 ' + mats.length + ' 份参考资料：\n' + lines.join('\n');
+          });
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'ref_read',
+          description: '读取指定参考资料的完整文本内容（MD）。参数 id 来自 ref_list 返回的 ID。',
+          parameters: {
+            type: 'object',
+            properties: { id: { type: 'string', description: '参考资料 ID（ref_list 返回的 ID）' } },
+            required: ['id']
+          }
+        },
+        requiresApproval: false,
+        handler: function(args) {
+          if (!args || !args.id) throw new Error('缺少参考材料 ID');
+          if (typeof ReferenceManager === 'undefined' || !ReferenceManager.getMd) throw new Error('ReferenceManager 不可用');
+          return Promise.resolve(ReferenceManager.getMd(args.id)).then(function(md) {
+            if (!md || !String(md).trim()) return '该参考资料没有可读取的文本内容（可能解析失败）。';
+            var t = String(md);
+            if (t.length > 12000) t = t.substring(0, 12000) + '\n...(内容过长，已截断)';
+            return t;
+          });
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'ref_capture',
+          description: '把指定的参考资料完整内容捕获（导入/追加）到当前笔记页。参数 id 来自 ref_list。',
+          parameters: {
+            type: 'object',
+            properties: { id: { type: 'string', description: '参考资料 ID（ref_list 返回的 ID）' } },
+            required: ['id']
+          }
+        },
+        requiresApproval: false,
+        handler: function(args) {
+          if (!args || !args.id) throw new Error('缺少参考材料 ID');
+          if (typeof ReferenceManager === 'undefined' || !ReferenceManager.list || !ReferenceManager.getMd) throw new Error('ReferenceManager 不可用');
+          var bookId = _paCurrentBookId();
+          return Promise.resolve(ReferenceManager.list(bookId)).then(function(mats) {
+            var mat = null;
+            for (var i = 0; i < mats.length; i++) if (mats[i].id === args.id) { mat = mats[i]; break; }
+            if (!mat) throw new Error('找不到该参考资料（ID:' + args.id + '）');
+            return Promise.resolve(ReferenceManager.getMd(args.id)).then(function(md) {
+              if (!md || !String(md).trim()) throw new Error('该参考资料没有可导入的文本内容');
+              return _paCaptureToNote(
+                '参考资料：' + (mat.name || mat.id),
+                String(md),
+                '来源：参考材料 ID `' + mat.id + '`，解析器 `' + (mat.parser || '-') + '`'
+              );
+            });
+          });
+        }
+      },
+      // -------------------- 附件（AttachmentManager） --------------------
+      {
+        type: 'function',
+        function: {
+          name: 'attach_list',
+          description: '列出当前教材下的附件文件树：文件夹/文件名称与 ID。用户问"有哪些附件"、或需要读取附件时先调用它。',
+          parameters: { type: 'object', properties: {}, required: [] }
+        },
+        requiresApproval: false,
+        handler: function() {
+          var bookId = _paCurrentBookId();
+          if (!bookId) throw new Error('当前未打开任何教材，无法获取附件');
+          var tree = null;
+          try {
+            var all = JSON.parse(localStorage.getItem('shuchongu_attachfm_v1') || '{}');
+            tree = all['book:' + bookId] || null;
+          } catch (e) { tree = null; }
+          if (!tree || !tree.children || !tree.children.length) return '当前教材下暂无附件。';
+          var lines = [];
+          (function walk(nodes, depth) {
+            for (var i = 0; i < nodes.length; i++) {
+              var n = nodes[i];
+              var pad = new Array(depth * 2 + 1).join(' ');
+              if (n.type === 'folder') {
+                lines.push(pad + '📁 ' + n.name);
+                if (n.children) walk(n.children, depth + 1);
+              } else {
+                lines.push(pad + '📄 ' + n.name + '（ID:' + n.id + '）');
+              }
+            }
+          })(tree.children, 0);
+          return '当前教材附件（bookId:' + bookId + '）：\n' + lines.join('\n');
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'attach_read',
+          description: '读取指定附件的内容（仅文本类附件可读：txt/md/json/xml/html 等）。参数 id 来自 attach_list。图片/PDF 等二进制附件无法直接读取文本。',
+          parameters: {
+            type: 'object',
+            properties: { id: { type: 'string', description: '附件 ID（attach_list 返回的 ID）' } },
+            required: ['id']
+          }
+        },
+        requiresApproval: false,
+        handler: function(args) {
+          if (!args || !args.id) throw new Error('缺少附件 ID');
+          if (typeof DataLayer === 'undefined' || !DataLayer.get) throw new Error('DataLayer 不可用');
+          return Promise.resolve(DataLayer.get('attachments', args.id)).then(function(rec) {
+            if (!rec) throw new Error('附件不存在（ID:' + args.id + '）');
+            var name = rec.name || '附件';
+            if (!rec.data) return '附件「' + name + '」没有可读取的数据。';
+            var isText = !rec.mimeType || /text|json|xml|markdown|plain|html|javascript|css|sql|csv|yaml/.test(rec.mimeType);
+            if (!isText) return '附件「' + name + '」不是文本类型（' + (rec.mimeType || '?') + '），无法直接读取内容。';
+            if (typeof Blob !== 'undefined' && rec.data instanceof Blob) {
+              return new Promise(function(resolve, reject) {
+                var fr = new FileReader();
+                fr.onload = function() { resolve(String(fr.result || '')); };
+                fr.onerror = function() { reject(new Error('读取附件失败')); };
+                fr.readAsText(rec.data);
+              }).then(function(t) {
+                if (t.length > 12000) t = t.substring(0, 12000) + '\n...(内容过长，已截断)';
+                return '【附件：' + name + '】\n' + t;
+              });
+            }
+            return '附件「' + name + '」内容为空。';
+          });
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'attach_capture',
+          description: '把指定的文本类附件内容捕获（导入/追加）到当前笔记页。参数 id 来自 attach_list。',
+          parameters: {
+            type: 'object',
+            properties: { id: { type: 'string', description: '附件 ID（attach_list 返回的 ID）' } },
+            required: ['id']
+          }
+        },
+        requiresApproval: false,
+        handler: function(args) {
+          if (!args || !args.id) throw new Error('缺少附件 ID');
+          if (typeof DataLayer === 'undefined' || !DataLayer.get) throw new Error('DataLayer 不可用');
+          return Promise.resolve(DataLayer.get('attachments', args.id)).then(function(rec) {
+            if (!rec) throw new Error('附件不存在（ID:' + args.id + '）');
+            var name = rec.name || '附件';
+            if (!rec.data) throw new Error('附件「' + name + '」没有数据');
+            var isText = !rec.mimeType || /text|json|xml|markdown|plain|html|javascript|css|sql|csv|yaml/.test(rec.mimeType);
+            if (!isText) throw new Error('附件「' + name + '」不是文本类型，无法捕获文本内容');
+            if (typeof Blob !== 'undefined' && rec.data instanceof Blob) {
+              return new Promise(function(resolve, reject) {
+                var fr = new FileReader();
+                fr.onload = function() { resolve(String(fr.result || '')); };
+                fr.onerror = function() { reject(new Error('读取附件失败')); };
+                fr.readAsText(rec.data);
+              }).then(function(t) {
+                return _paCaptureToNote('附件：' + name, t, '来源：附件 ID `' + rec.id + '`，类型 `' + (rec.mimeType || '-') + '`');
+              });
+            }
+            throw new Error('附件「' + name + '」内容为空');
+          });
+        }
       }
 
     ];
@@ -4768,6 +4979,12 @@ function _harnessIcon(status) {
         + '【工具调用轮次限制】\n'
         + '每轮对话最多可进行 12 次 LLM 推理（即 tool_calls 循环），超过则中止。所以要在最少的轮次内完成目标，不要做冗余/重复的工具调用。\n'
         + '如果单次 LLM 返回了多个 tool_calls，可一次性并行执行（你只需把多个 tool_calls 一起返回即可，系统会按顺序执行）。\n\n'
+        + '【参考资料与附件】\n'
+        + '当用户问"有哪些参考资料/参考材料/附件"或需要基于它们工作时：\n'
+        + '  1. 先用 ref_list 列出当前教材的参考资料，或 attach_list 列出当前教材的附件（含 ID）；\n'
+        + '  2. 需要内容时用 ref_read（参考资料）或 attach_read（文本类附件）读取，超长会自动截断；\n'
+        + '  3. 用户要求"把材料/附件放进笔记/捕获"时，用 ref_capture 或 attach_capture 直接导入当前笔记页。\n'
+        + '若参考资料空间有材料但当前教材下没有，如实告知用户材料所属教材即可，不要谎称"没有"。\n\n'
         + '【AI 编程系统】当现有工具无法满足用户需求时，你可以用 system_createTool 创建新工具：定义工具名、描述、参数 schema 和 handler 代码（JS）。handler 可通过 ctx 访问所有核心模块（ctx.PDFReader/ctx.Notebook/ctx.DataLayer/ctx.PDFAnnotate/ctx.FileManager/ctx.ReferenceManager/ctx.AIEngine/ctx.AppShell/ctx.fetch 等）。创建后该工具立即可被调用。用 system_listCustomTools 查看已有自定义工具，system_deleteCustomTool 删除。\n'
         + '示例：用户要"统计当前笔记的字数"——你可以创建工具 wordcount，code 为：return "当前笔记字数：" + (ctx.Notebook.getPageMdDirect ? ctx.Notebook.getPageMdDirect().length : "未知"); 然后直接调用它。'
     };

@@ -4457,11 +4457,14 @@ body.pa-board-md-on:not(.pa-board-html-on) .pa-tab-md { display: inline-flex !im
   z-index: 1;
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 24px;
   box-sizing: border-box;
   text-align: center;
+  overflow-y: auto;
 }
 .message-card {
   max-width: 680px;
@@ -4522,5 +4525,91 @@ body.pa-board-md-on:not(.pa-board-html-on) .pa-tab-md { display: inline-flex !im
   line-height: 2.05;
   letter-spacing: .6px;
 }
+
+/* ---------- 寄语 · 密码门禁 ---------- */
+.message-gate {
+  margin-top: 22px;
+  width: 92%;
+  max-width: 680px;
+}
+.gate-box {
+  padding: 22px 26px 24px;
+  background: rgba(10, 18, 32, 0.30);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  box-shadow: 0 14px 40px rgba(2, 6, 23, 0.40), inset 0 1px 0 rgba(255,255,255,.05);
+  text-align: left;
+}
+.gate-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: 1px;
+}
+.gate-tip {
+  margin: 4px 0 14px;
+  font-size: 12.5px;
+  color: rgba(148, 163, 184, 0.85);
+}
+.gate-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.gate-tab {
+  padding: 6px 16px;
+  border: 1px solid rgba(148,163,184,.28);
+  border-radius: 999px;
+  background: rgba(148,163,184,.08);
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .2s;
+}
+.gate-tab:hover { color: #e2e8f0; border-color: rgba(148,163,184,.5); }
+.gate-tab.active {
+  background: linear-gradient(135deg, rgba(56,189,248,.22), rgba(129,140,248,.22));
+  border-color: rgba(56,189,248,.5);
+  color: #bae6fd;
+}
+.gate-q { margin: 0 0 10px; font-size: 13.5px; color: #cbd5e1; }
+.gate-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gate-input {
+  padding: 8px 12px;
+  border: 1px solid rgba(148,163,184,.35);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.45);
+  color: #e2e8f0;
+  font-size: 14px;
+  outline: none;
+  transition: border-color .2s;
+}
+.gate-input:focus { border-color: #38bdf8; }
+.gate-input::-webkit-outer-spin-button,
+.gate-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.gate-input[type=number] { -moz-appearance: textfield; width: 76px; text-align: center; }
+.gate-pwd-input { flex: 1; min-width: 200px; }
+.gate-sep { color: #94a3b8; font-size: 13px; }
+.gate-btn {
+  padding: 8px 22px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  color: #0a1220;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .15s, box-shadow .2s;
+}
+.gate-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px -4px rgba(56,189,248,.55); }
+.gate-btn-ghost { background: rgba(148,163,184,.16); color: #cbd5e1; }
+.gate-msg { min-height: 18px; margin-top: 8px; font-size: 12.5px; color: #f87171; }
+.gate-locked-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.gate-unlocked-tag { font-size: 13px; color: #4ade80; font-weight: 600; }
+.gate-link-btn {
+  border: none; background: none; color: #7dd3fc;
+  font-size: 12.5px; cursor: pointer; text-decoration: underline;
+  padding: 2px 4px;
+}
+.gate-link-btn:hover { color: #bae6fd; }
+.gate-change-pane { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 
 

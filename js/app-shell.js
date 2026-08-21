@@ -825,6 +825,11 @@ const AppShell = (function() {
   }
 
   function _switchView(view) {
+    // 寄语门禁：未解锁时禁止进入书架/阅读/笔记/附件等页面
+    if (view !== 'message' && !_gateUnlocked()) {
+      _gateDeny(view);
+      return;
+    }
     const pdfReader = document.getElementById('pdfReader');
     const notebook = document.getElementById('notebook');
     const splitter = document.getElementById('splitter');
@@ -964,6 +969,172 @@ const AppShell = (function() {
     window.addEventListener('resize', resize);
     resize();
     loop();
+  }
+
+  // ============================================================
+  // 寄语 · 密码门禁：解锁后才能进入 书架/阅读/笔记/附件 等页面
+  //   方案一：回答 lyn 的农历生日（7 月 7 日）
+  //   方案二：管理员密码（初始 123456，可修改，SHA-256 存储）
+  // ============================================================
+  var GATE_KEY = 'shuchongu_gate_unlocked';
+  var GATE_PWD_KEY = 'shuchongu_admin_pwd';
+  var GATE_DEFAULT_PWD_HASH = '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'; // sha256("123456")
+  var GATE_BIRTH_MONTH = 7, GATE_BIRTH_DAY = 7; // lyn 的农历生日 7 月 7 日
+
+  function _gateUnlocked() {
+    try { return localStorage.getItem(GATE_KEY) === '1'; } catch (e) { return false; }
+  }
+  function _setUnlocked() {
+    try { localStorage.setItem(GATE_KEY, '1'); } catch (e) {}
+    _gateRefresh();
+  }
+  function _gateLock() {
+    try { localStorage.removeItem(GATE_KEY); } catch (e) {}
+    _gateRefresh();
+    _switchView('message');
+  }
+  function _getPwdHash() {
+    try { return localStorage.getItem(GATE_PWD_KEY) || GATE_DEFAULT_PWD_HASH; } catch (e) { return GATE_DEFAULT_PWD_HASH; }
+  }
+  function _sha256hex(s) {
+    return new Promise(function(resolve) {
+      try {
+        if (window.crypto && crypto.subtle && typeof TextEncoder !== 'undefined') {
+          crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s || ''))).then(function(buf) {
+            var hex = Array.prototype.map.call(new Uint8Array(buf), function(b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+            resolve(hex);
+          }).catch(function() { resolve(_fallbackHash(String(s || ''))); });
+          return;
+        }
+      } catch (e) {}
+      resolve(_fallbackHash(String(s || '')));
+    });
+  }
+  function _fallbackHash(s) {
+    var h = 5381, i, c;
+    for (i = 0; i < s.length; i++) { c = s.charCodeAt(i); h = ((h << 5) + h + c) | 0; }
+    return 'djb2:' + Math.abs(h).toString(16);
+  }
+  function _verifyGatePwd(p) {
+    return _sha256hex(p).then(function(h) { return h === _getPwdHash(); });
+  }
+  function _gateMsg(text, ok) {
+    var el = document.getElementById('gateMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = ok ? '#4ade80' : '#f87171';
+  }
+  // 未解锁被拦截：切回寄语并提示
+  function _gateDeny(view) {
+    _switchView('message');
+    var names = { shelf: '书架', read: '阅读', note: '笔记', split: '分栏', attach: '附件' };
+    _gateMsg('⚠ 请先解锁再进入「' + (names[view] || view) + '」：回答下方生日问题或输入管理员密码。', false);
+    var gate = document.getElementById('messageGate');
+    if (gate) gate.style.display = '';
+  }
+  // 解锁状态 → UI 刷新
+  function _gateRefresh() {
+    var unlocked = _gateUnlocked();
+    var gate = document.getElementById('messageGate');
+    var gateBox = document.querySelector('.gate-box');
+    var lockedRow = document.getElementById('gateLockedRow');
+    var changePane = document.getElementById('gateChangePane');
+    if (gateBox) {
+      // 已解锁：隐藏验证表单，只显示状态行；未解锁：显示验证表单
+      var panes = gateBox.querySelectorAll('.gate-pane');
+      for (var i = 0; i < panes.length; i++) panes[i].style.display = unlocked ? 'none' : '';
+      var tabs = gateBox.querySelectorAll('.gate-tab');
+      for (var j = 0; j < tabs.length; j++) tabs[j].style.display = unlocked ? 'none' : '';
+      var tip = gateBox.querySelector('.gate-tip');
+      if (tip) tip.style.display = unlocked ? 'none' : '';
+      var title = gateBox.querySelector('.gate-title');
+      if (title) title.textContent = unlocked ? '🔓 书虫蛊已解锁' : '🔒 进入书虫蛊';
+    }
+    if (lockedRow) lockedRow.style.display = unlocked ? '' : 'none';
+    if (changePane) changePane.style.display = 'none';
+    if (gate) gate.style.display = unlocked ? '' : '';
+  }
+  function _initGate() {
+    var gate = document.getElementById('messageGate');
+    if (!gate) return;
+    // Tab 切换（生日 / 密码）
+    gate.querySelectorAll('.gate-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        gate.querySelectorAll('.gate-tab').forEach(function(t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        var k = tab.getAttribute('data-gate');
+        gate.querySelectorAll('.gate-pane').forEach(function(p) {
+          p.style.display = (p.getAttribute('data-pane') === k) ? '' : 'none';
+        });
+        _gateMsg('', false);
+      });
+    });
+    // 方案一：生日验证
+    var btnBirth = document.getElementById('btnGateBirth');
+    if (btnBirth) btnBirth.addEventListener('click', function() {
+      var m = parseInt(document.getElementById('gateBirthMonth').value, 10);
+      var d = parseInt(document.getElementById('gateBirthDay').value, 10);
+      if (m === GATE_BIRTH_MONTH && d === GATE_BIRTH_DAY) {
+        _setUnlocked();
+        _gateMsg('✅ 生日验证通过，已解锁！', true);
+        _gateRefresh();
+      } else {
+        _gateMsg('❌ 答案不正确，再想想～（提示：农历）', false);
+      }
+    });
+    // 方案二：管理员密码
+    var btnPwd = document.getElementById('btnGatePwd');
+    var pwdInput = document.getElementById('gatePwd');
+    function tryPwd() {
+      var p = pwdInput ? pwdInput.value : '';
+      if (!p) { _gateMsg('请输入管理员密码', false); return; }
+      _verifyGatePwd(p).then(function(ok) {
+        if (ok) {
+          _setUnlocked();
+          _gateMsg('✅ 密码正确，已解锁！', true);
+          _gateRefresh();
+          if (pwdInput) pwdInput.value = '';
+        } else {
+          _gateMsg('❌ 密码错误，请重试（默认 123456）', false);
+        }
+      });
+    }
+    if (btnPwd) btnPwd.addEventListener('click', tryPwd);
+    if (pwdInput) pwdInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') tryPwd(); });
+    // 重新锁定
+    var btnLock = document.getElementById('btnGateLock');
+    if (btnLock) btnLock.addEventListener('click', function() { _gateLock(); });
+    // 修改管理员密码
+    var btnChange = document.getElementById('btnGateChange');
+    var changePane = document.getElementById('gateChangePane');
+    if (btnChange) btnChange.addEventListener('click', function() {
+      if (changePane) changePane.style.display = changePane.style.display === 'none' ? 'flex' : 'none';
+    });
+    var btnChangeCancel = document.getElementById('btnGateChangeCancel');
+    if (btnChangeCancel) btnChangeCancel.addEventListener('click', function() {
+      if (changePane) changePane.style.display = 'none';
+      var o = document.getElementById('gateOldPwd'), n = document.getElementById('gateNewPwd');
+      if (o) o.value = ''; if (n) n.value = '';
+      _gateMsg('', false);
+    });
+    var btnChangeSave = document.getElementById('btnGateChangeSave');
+    if (btnChangeSave) btnChangeSave.addEventListener('click', function() {
+      var o = document.getElementById('gateOldPwd');
+      var n = document.getElementById('gateNewPwd');
+      var oldP = o ? o.value : '', newP = n ? n.value : '';
+      if (!oldP || !newP) { _gateMsg('请填写旧密码与新密码', false); return; }
+      if (newP.length < 4) { _gateMsg('新密码至少 4 位', false); return; }
+      _verifyGatePwd(oldP).then(function(ok) {
+        if (!ok) { _gateMsg('旧密码不正确', false); return; }
+        return _sha256hex(newP).then(function(h) {
+          try { localStorage.setItem(GATE_PWD_KEY, h); } catch (e) { _gateMsg('保存失败（存储不可用）', false); return; }
+          if (o) o.value = ''; if (n) n.value = '';
+          if (changePane) changePane.style.display = 'none';
+          _gateMsg('✅ 管理员密码已更新', true);
+        });
+      });
+    });
+    _gateRefresh();
   }
 
   // 视图切换后等待浏览器 reflow，然后重渲染 PDF 页面以同步标注层尺寸
@@ -1350,6 +1521,9 @@ const AppShell = (function() {
     // 寄语视图：冷色粒子网络背景动画（仅视图可见时绘制，切走自动暂停）
     _initMessageParticles();
 
+    // 寄语 · 密码门禁初始化
+    _initGate();
+
     // P3-16：附件管理器初始化
     if (typeof AttachmentManager !== 'undefined' && typeof AttachmentManager.init === 'function') {
       AttachmentManager.init();
@@ -1389,6 +1563,11 @@ const AppShell = (function() {
     });
 
     // ---- 启动时自动加载上次打开的 PDF 和对应笔记 ----
+    // 寄语门禁：未解锁时不自动恢复上次阅读，停留在寄语页，需先解锁
+    if (!_gateUnlocked()) {
+      _switchView('message');
+      return;
+    }
     DataLayer.init().then(function() {
       // 检查是否有已保存的 PDF
       return DataLayer.get('pdfs', 'current');
