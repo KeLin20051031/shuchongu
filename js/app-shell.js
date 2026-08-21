@@ -977,6 +977,7 @@ const AppShell = (function() {
   //   方案二：管理员密码（初始 123456，可修改，SHA-256 存储）
   // ============================================================
   var GATE_KEY = 'shuchongu_gate_unlocked';
+  var GATE_METHOD_KEY = 'shuchongu_gate_method'; // 'birth' 生日验证 / 'pwd' 管理员密码
   var GATE_PWD_KEY = 'shuchongu_admin_pwd';
   var GATE_DEFAULT_PWD_HASH = '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'; // sha256("123456")
   var GATE_BIRTH_MONTH = 7, GATE_BIRTH_DAY = 7; // lyn 的农历生日 7 月 7 日
@@ -984,12 +985,21 @@ const AppShell = (function() {
   function _gateUnlocked() {
     try { return localStorage.getItem(GATE_KEY) === '1'; } catch (e) { return false; }
   }
-  function _setUnlocked() {
-    try { localStorage.setItem(GATE_KEY, '1'); } catch (e) {}
+  function _gateMethod() {
+    try { return localStorage.getItem(GATE_METHOD_KEY) || ''; } catch (e) { return ''; }
+  }
+  function _setUnlocked(method) {
+    try {
+      localStorage.setItem(GATE_KEY, '1');
+      if (method) localStorage.setItem(GATE_METHOD_KEY, method);
+    } catch (e) {}
     _gateRefresh();
   }
   function _gateLock() {
-    try { localStorage.removeItem(GATE_KEY); } catch (e) {}
+    try {
+      localStorage.removeItem(GATE_KEY);
+      localStorage.removeItem(GATE_METHOD_KEY);
+    } catch (e) {}
     _gateRefresh();
     _switchView('message');
   }
@@ -1035,10 +1045,18 @@ const AppShell = (function() {
   // 解锁状态 → UI 刷新
   function _gateRefresh() {
     var unlocked = _gateUnlocked();
+    var method = _gateMethod();
     var gate = document.getElementById('messageGate');
     var gateBox = document.querySelector('.gate-box');
     var lockedRow = document.getElementById('gateLockedRow');
     var changePane = document.getElementById('gateChangePane');
+    // 生日快乐寄语：仅在"生日方式"解锁后才显示；未解锁或管理员方式登录均隐藏，只保留项目介绍
+    var titleEl = document.querySelector('.message-title');
+    if (titleEl) titleEl.style.display = (unlocked && method === 'birth') ? '' : 'none';
+    var badgeEl = document.querySelector('.message-badge');
+    if (badgeEl) {
+      badgeEl.textContent = (unlocked && method === 'birth') ? '📖 书虫蛊 · 寄语' : '📖 书虫蛊';
+    }
     if (gateBox) {
       // 已解锁：隐藏验证表单，只显示状态行；未解锁：显示验证表单
       var panes = gateBox.querySelectorAll('.gate-pane');
@@ -1048,7 +1066,11 @@ const AppShell = (function() {
       var tip = gateBox.querySelector('.gate-tip');
       if (tip) tip.style.display = unlocked ? 'none' : '';
       var title = gateBox.querySelector('.gate-title');
-      if (title) title.textContent = unlocked ? '🔓 书虫蛊已解锁' : '🔒 进入书虫蛊';
+      if (title) {
+        if (!unlocked) title.textContent = '🔒 进入书虫蛊';
+        else if (method === 'birth') title.textContent = '🔓 生日验证通过，已解锁';
+        else title.textContent = '🔓 管理员已登录';
+      }
     }
     if (lockedRow) lockedRow.style.display = unlocked ? '' : 'none';
     if (changePane) changePane.style.display = 'none';
@@ -1075,7 +1097,7 @@ const AppShell = (function() {
       var m = parseInt(document.getElementById('gateBirthMonth').value, 10);
       var d = parseInt(document.getElementById('gateBirthDay').value, 10);
       if (m === GATE_BIRTH_MONTH && d === GATE_BIRTH_DAY) {
-        _setUnlocked();
+        _setUnlocked('birth');
         _gateMsg('✅ 生日验证通过，已解锁！', true);
         _gateRefresh();
       } else {
@@ -1090,7 +1112,7 @@ const AppShell = (function() {
       if (!p) { _gateMsg('请输入管理员密码', false); return; }
       _verifyGatePwd(p).then(function(ok) {
         if (ok) {
-          _setUnlocked();
+          _setUnlocked('pwd');
           _gateMsg('✅ 密码正确，已解锁！', true);
           _gateRefresh();
           if (pwdInput) pwdInput.value = '';
