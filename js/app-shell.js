@@ -1159,6 +1159,113 @@ const AppShell = (function() {
     _gateRefresh();
   }
 
+  // ============================================================
+  // 安卓触摸点击兜底（全局）
+  //   部分安卓 WebView 触摸时不合成 click/dblclick（只有外接鼠标可用），
+  //   这里用 touchend + 位移判断手动派发 click/dblclick，让所有按钮/列表可点。
+  //   仅触屏设备生效；位移过大视为滚动/拖动不触发；输入类元素不拦截。
+  // ============================================================
+  function _initTouchTapFallback() {
+    var isTouch = ('ontouchstart' in window) || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+    if (!isTouch) return;
+    if (document.body && document.body.__tapFallbackBound) return;
+    if (document.body) document.body.__tapFallbackBound = true;
+
+    var TAP_DIST = 14;   // 位移阈值：超过视为滚动/拖动，不触发点击
+    var DBL_MS = 320;    // 双击判定间隔
+    var startX = 0, startY = 0, tapTarget = null, tapMoved = false;
+    var lastTap = { el: null, ts: 0, x: 0, y: 0 };
+
+    function isClickable(el) {
+      if (!el || el.nodeType !== 1) return null;
+      while (el && el !== document.body) {
+        var tag = el.tagName;
+        if (tag === 'BUTTON' || tag === 'A' || tag === 'LABEL') return el;
+        if (tag === 'INPUT') {
+          var it = (el.type || '').toLowerCase();
+          if (it === 'checkbox' || it === 'radio') return el;
+          return null; // 文本/数字/密码输入框不拦截，保留原生聚焦
+        }
+        if (tag === 'SELECT' || tag === 'TEXTAREA') return null; // 原生控件
+        if (el.getAttribute) {
+          if (el.getAttribute('data-tool') || el.getAttribute('onclick')) return el;
+          if (el.getAttribute('role') === 'button') return el;
+        }
+        if (el.classList) {
+          var cl = el.classList;
+          if (cl.contains('pdf-btn') || cl.contains('btn-icon') || cl.contains('tab-btn') ||
+              cl.contains('shelf-card') || cl.contains('shelf-import-btn') ||
+              cl.contains('rm-item') || cl.contains('attach-node') || cl.contains('nfm-item') ||
+              cl.contains('gate-btn') || cl.contains('gate-tab') || cl.contains('gate-link-btn') ||
+              cl.contains('pa-orb') || cl.contains('pa-chat-btn')) return el;
+        }
+        el = el.parentNode;
+      }
+      return null;
+    }
+
+    // 标记一次"已由触摸派发"，用于拦截随后可能到来的原生合成 click
+    function markTapFired(el) {
+      el.__tapFired = true;
+      setTimeout(function() { if (el.__tapFired) el.__tapFired = false; }, 650);
+    }
+
+    document.addEventListener('touchstart', function(e) {
+      if (e.touches && e.touches.length > 1) { tapTarget = null; return; }
+      var c = isClickable(e.target);
+      if (!c) { tapTarget = null; return; }
+      var t = e.touches[0];
+      startX = t.clientX; startY = t.clientY;
+      tapTarget = c; tapMoved = false;
+    }, { passive: true, capture: true });
+
+    document.addEventListener('touchmove', function(e) {
+      if (!tapTarget) return;
+      var t = e.touches[0];
+      if (Math.abs(t.clientX - startX) > TAP_DIST || Math.abs(t.clientY - startY) > TAP_DIST) {
+        tapMoved = true;
+      }
+    }, { passive: true, capture: true });
+
+    document.addEventListener('touchend', function(e) {
+      if (!tapTarget || tapMoved) { tapTarget = null; return; }
+      var el = tapTarget;
+      tapTarget = null;
+      var t = e.changedTouches ? e.changedTouches[0] : null;
+      var now = Date.now();
+      var x = t ? t.clientX : 0, y = t ? t.clientY : 0;
+      // 双击判定（同元素 320ms 内再次触摸）：派发 dblclick（打开笔记/折叠文件夹等）
+      if (lastTap.el === el && (now - lastTap.ts) < DBL_MS &&
+          Math.abs(x - lastTap.x) < 40 && Math.abs(y - lastTap.y) < 40) {
+        lastTap.el = null;
+        markTapFired(el);
+        try { el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window })); } catch (err) {}
+        return;
+      }
+      lastTap = { el: el, ts: now, x: x, y: y };
+      markTapFired(el);
+      // 手动派发 click：触发绑定在 click/onclick 上的全部逻辑
+      try { el.click(); } catch (err) {}
+    }, { passive: true, capture: true });
+
+    // 拦截原生合成 click（isTrusted=true 且刚被触摸派发过），避免重复执行；
+    // 手动派发的 click（isTrusted=false）放行
+    document.addEventListener('click', function(e) {
+      if (e.isTrusted) {
+        var el = e.target;
+        while (el && el.nodeType === 1 && el !== document) {
+          if (el.__tapFired) {
+            el.__tapFired = false;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+          }
+          el = el.parentNode;
+        }
+      }
+    }, true);
+  }
+
   // 视图切换后等待浏览器 reflow，然后重渲染 PDF 页面以同步标注层尺寸
   function _reRenderPdfIfNeeded() {
     if (typeof PDFReader === 'undefined' || !PDFReader.renderPage || !PDFReader.getCurrentPage) return;
@@ -1513,32 +1620,9 @@ const AppShell = (function() {
       if (typeof FileManager !== 'undefined') FileManager.render();
     });
 
-    // 安卓端触摸兜底：部分 WebView 不触发 click，用 touchstart 兜底
-    var _tabBtns = [
-      { id: 'btnViewRead', view: 'read' },
-      { id: 'btnViewNote', view: 'note' },
-      { id: 'btnViewMessage', view: 'message' },
-      { id: 'btnViewAttach', view: 'attach' },
-      { id: 'btnViewSplit', view: 'split' },
-      { id: 'btnViewShelf', view: 'shelf' }
-    ];
-    _tabBtns.forEach(function(item) {
-      var btn = document.getElementById(item.id);
-      if (!btn) return;
-      var _touchFired = false;
-      btn.addEventListener('touchstart', function(e) {
-        _touchFired = true;
-        _switchView(item.view);
-        if (item.view === 'shelf' && typeof FileManager !== 'undefined') FileManager.render();
-        e.preventDefault();
-      }, { passive: false });
-      // 如果 touchstart 已触发，阻止后续的 click 重复执行
-      btn.addEventListener('click', function(e) {
-        if (_touchFired) { _touchFired = false; e.preventDefault(); return; }
-        _switchView(item.view);
-        if (item.view === 'shelf' && typeof FileManager !== 'undefined') FileManager.render();
-      });
-    });
+    // 安卓触摸兜底（全局）：部分 WebView 触摸不合成 click/dblclick，
+    // 统一由 touchend+位移判断手动派发，覆盖顶栏/PDF工具栏/划重点/笔记/列表等所有可点击元素
+    _initTouchTapFallback();
 
     // 寄语视图：冷色粒子网络背景动画（仅视图可见时绘制，切走自动暂停）
     _initMessageParticles();
