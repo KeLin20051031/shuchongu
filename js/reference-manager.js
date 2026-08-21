@@ -99,6 +99,33 @@ const ReferenceManager = (function () {
     return null;
   }
 
+  // 对外暴露：解析当前教材 ID（供 AI 上下文等外部调用）
+  function resolveBookId() {
+    return _resolveBookId();
+  }
+
+  // 列出参考空间全部材料（跨教材），供 AI 兜底检索，避免"明明有材料却报没有"
+  async function getAll() {
+    if (typeof DataLayer !== 'undefined' && DataLayer.getAll) {
+      try {
+        var all = await DataLayer.getAll('referenceMats');
+        if (Array.isArray(all) && all.length) return all;
+      } catch (e) { /* ignore */ }
+    }
+    // 退化：localStorage 兜底扫描全部 scg:refs:*
+    var out = [];
+    try {
+      var keys = Object.keys(localStorage || {}).filter(function (x) { return x.indexOf('scg:refs:') === 0; });
+      for (var i = 0; i < keys.length; i++) {
+        try {
+          var arr = JSON.parse(localStorage.getItem(keys[i]) || '[]');
+          for (var j = 0; j < arr.length; j++) out.push(arr[j]);
+        } catch (_) { /* ignore */ }
+      }
+    } catch (_) { /* ignore */ }
+    return out;
+  }
+
   function _sourceType(name) {
     var m = /\.([a-z0-9]+)$/i.exec(name || '');
     return m ? m[1].toLowerCase() : 'bin';
@@ -422,7 +449,31 @@ const ReferenceManager = (function () {
 
   async function getByBook(bookId) {
     var mats = await list(bookId);
-    if (!mats || !mats.length) return '';
+    if (!mats || !mats.length) {
+      // 兜底：当前教材无材料，但参考空间存在其他教材的材料 → 给出提示而非空，避免 AI 误报"没有材料"
+      var others = await getAll();
+      var othersList = [];
+      if (others && others.length) {
+        var byBook = {};
+        for (var oi = 0; oi < others.length; oi++) {
+          var om = others[oi];
+          if (!om) continue;
+          var key = om.bookId || '未知教材';
+          if (!byBook[key]) byBook[key] = [];
+          byBook[key].push(om.name || om.title || om.id);
+        }
+        var keys2 = Object.keys(byBook);
+        for (var ki = 0; ki < keys2.length; ki++) {
+          othersList.push('- [' + keys2[ki] + ']：' + byBook[keys2[ki]].join('、'));
+        }
+      }
+      if (othersList.length) {
+        return '【提示】当前教材（' + (bookId || '未知') + '）下暂无参考材料，但参考资料空间存在以下其他教材的材料：\n' +
+          othersList.join('\n') +
+          '\n（请告知用户这些材料属于其他教材；若用户需要，引导其切换到对应教材后再使用。）';
+      }
+      return '';
+    }
     var parts = [];
     for (var i = 0; i < mats.length; i++) {
       var md = mats[i].md;
@@ -430,6 +481,10 @@ const ReferenceManager = (function () {
       if (md && md.trim()) {
         parts.push('## 参考资料：' + (mats[i].name || mats[i].title || mats[i].id) + '\n\n' + String(md).trim());
       }
+    }
+    if (!parts.length && mats.length) {
+      // 当前教材确有材料，但正文为空（解析失败等）→ 明确提示，避免误报"没有材料"
+      return '【提示】当前教材下存在 ' + mats.length + ' 份参考材料，但暂无可用的文本内容（可能解析失败）。请告知用户可尝试在参考资料管理器中"重新解析"该材料。';
     }
     return parts.join('\n\n---\n\n');
   }
@@ -834,6 +889,8 @@ const ReferenceManager = (function () {
     list: list,
     getMd: getMd,
     getByBook: getByBook,
+    getAll: getAll,
+    resolveBookId: resolveBookId,
     remove: remove,
     reparse: reparse,
     downloadMd: downloadMd,

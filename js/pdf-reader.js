@@ -421,6 +421,15 @@ const PDFReader = (function() {
     for (var i = 0; i < spans.length; i++) {
       spans[i].style.transformOrigin = '0 0';
     }
+
+    // 文本层渲染完成后，重新对齐标注层（文本层 DOM 插入可能导致画布位置微调）
+    if (typeof PDFAnnotate !== 'undefined' && PDFAnnotate.renderPage) {
+      try {
+        var cr2 = canvas.getBoundingClientRect();
+        var vr2 = container.getBoundingClientRect();
+        PDFAnnotate.renderPage(pageNum, cr2.width, cr2.height, cr2.left - vr2.left, cr2.top - vr2.top, lastScale);
+      } catch (e3) { /* 标注层对齐失败不影响阅读 */ }
+    }
   }
 
   // ---------- OCR 文字层：扫描件用透明文本 span 覆盖在图上，实现"可划选" ----------

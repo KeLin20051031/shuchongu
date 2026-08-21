@@ -1,3 +1,15 @@
+/* ============================================================
+   内置手写字体（安卓端无 Segoe Script / KaiTi 等系统字体，通过 CDN 加载）
+   LongCang(龙藏)：中文手写行书风格，替代 Segoe Script
+   LXGW WenKai(霞鹜文楷)：中文楷体，替代 KaiTi / STKaiti
+   ============================================================ */
+@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-regular.css');
+@font-face {
+  font-family: 'LongCang';
+  src: url('https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/longcang/LongCang-Regular.ttf') format('truetype');
+  font-weight: normal; font-style: normal; font-display: swap;
+}
+
 :root {
   --paper-bg: #f7f1e3;
   --reader-bg: #efe9dc;
@@ -28,16 +40,18 @@
 *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
 html,body { height:100%; overflow:hidden; }
 body { font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif; background:var(--reader-bg); color:var(--text-primary); font-size:14px; }
+/* 安卓端触摸优化：消除 300ms 点击延迟和双击缩放 */
+button, .tab-btn, .btn-icon, .pdf-btn, a[role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 #app { display:flex; flex-direction:column; height:100vh; }
 #topbar { height:var(--topbar-h); display:flex; align-items:center; padding:0 16px; gap:10px; background:var(--nav-bg); border-bottom:2px solid var(--nav-border); color:var(--nav-text); box-shadow:0 2px 10px rgba(137,178,145,.18); }
-.logo { font-weight:700; font-size:19px; color:var(--nav-text); letter-spacing:1px; display:flex; align-items:center; gap:6px; font-family:'KaiTi','STKaiti','SimSun',serif; text-shadow:0 1px 4px rgba(0,0,0,.35); }
+.logo { font-weight:700; font-size:19px; color:var(--nav-text); letter-spacing:1px; display:flex; align-items:center; gap:6px; font-family:'LXGW WenKai','KaiTi','STKaiti','SimSun',serif; text-shadow:0 1px 4px rgba(0,0,0,.35); }
 .logo-sub { font-size:11px; color:#e8d48a; font-weight:500; letter-spacing:2px; font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif; }
 .view-tabs { display:flex; gap:4px; margin-left:16px; }
-.tab-btn { padding:6px 14px; border:none; border-radius:7px; font-size:13px; background:transparent; color:#e2d8c0; cursor:pointer; transition:var(--transition); }
+.tab-btn { padding:6px 14px; border:none; border-radius:7px; font-size:13px; background:transparent; color:#e2d8c0; cursor:pointer; transition:var(--transition); -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
 .tab-btn:hover { background:rgba(255,255,255,.12); color:#f7f1e3; }
 .tab-btn.active { background:var(--nav-btn-active); color:#2b2a1e; font-weight:600; box-shadow:0 2px 8px rgba(201,162,39,.4); }
 .topbar-right { margin-left:auto; display:flex; gap:6px; }
-.btn-icon { width:32px; height:32px; border:none; border-radius:7px; background:rgba(255,255,255,.08); color:var(--nav-text); cursor:pointer; font-size:15px; transition:var(--transition); }
+.btn-icon { width:32px; height:32px; border:none; border-radius:7px; background:rgba(255,255,255,.08); color:var(--nav-text); cursor:pointer; font-size:15px; transition:var(--transition); -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
 .btn-icon:hover { background:rgba(255,255,255,.2); transform:translateY(-1px); color:#fffdf6; }
 #main { display:flex; flex:1; overflow:hidden; }
 .panel { flex:1; overflow:hidden; }
@@ -53,7 +67,7 @@ body { font-family:'Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif; ba
   var(--reader-bg);
 }
 .shelf-hero { padding:44px 32px 20px; text-align:center; position:relative; }
-.shelf-title { font-family:'KaiTi','STKaiti','SimSun',serif; font-size:52px; color:var(--accent-deep); letter-spacing:6px; text-shadow:0 2px 12px rgba(43,69,48,.18); animation:shelfFade .6s ease both; }
+.shelf-title { font-family:'LXGW WenKai','KaiTi','STKaiti','SimSun',serif; font-size:52px; color:var(--accent-deep); letter-spacing:6px; text-shadow:0 2px 12px rgba(43,69,48,.18); animation:shelfFade .6s ease both; }
 .shelf-tagline { margin-top:6px; color:var(--text-secondary); font-size:14px; letter-spacing:3px; font-family:'SimSun','STSong','Noto Serif SC',serif; animation:shelfFade .6s .08s ease both; }
 .shelf-tools { margin-top:22px; display:flex; justify-content:center; gap:12px; flex-wrap:wrap; animation:shelfFade .6s .16s ease both; }
 .shelf-search { width:320px; max-width:60vw; padding:10px 16px; border:1px solid var(--border-color); border-radius:24px; font-size:14px; background:#fffdf6; color:var(--text-primary); outline:none; transition:var(--transition); box-shadow:0 2px 8px rgba(0,0,0,.05); }
@@ -1007,7 +1021,7 @@ body.view-split #pdfFloatingNotesLayer {
   border-left-width: 3px;
   background: rgba(255,255,255,0.92);
   box-shadow: 1px 2px 7px rgba(0,0,0,0.08);
-  font-family: 'Segoe Script','Comic Sans MS','KaiTi',cursive;
+  font-family: 'LongCang','Segoe Script','Comic Sans MS','KaiTi',cursive;
   font-size: 12.5px;
   line-height: 1.5;
   color: #3a3a3a;
@@ -1064,7 +1078,7 @@ body.view-split #pdfFloatingNotesLayer {
   margin-bottom: 3px;
 }
 .pdf-floating-note-num {
-  font-family: 'Segoe Script','Comic Sans MS',cursive;
+  font-family: 'LongCang','Segoe Script','Comic Sans MS',cursive;
   font-size: 13px;
   font-weight: 700;
   width: 19px;
@@ -1454,7 +1468,7 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
 #btnFullPageNote { margin-left: 6px; }
 
 /* 内容区域 — 手写体 */
-.notebook-content { font-family:'Segoe Script','Comic Sans MS','KaiTi',cursive; font-size:18px; line-height:32px; color:var(--text-primary); min-height:100%; outline:none; }
+.notebook-content { font-family:'LongCang','Segoe Script','Comic Sans MS','KaiTi',cursive; font-size:18px; line-height:32px; color:var(--text-primary); min-height:100%; outline:none; }
 
 /* 空状态提示 */
 .notebook-empty { color:var(--text-secondary); font-size:15px; text-align:center; margin-top:60px; line-height:1.8; opacity:.7; }
@@ -1638,18 +1652,18 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
   border:none; padding:0 8px 0 0; margin:0;
   line-height:32px; opacity:1;
   background:transparent; animation:none;
-  font-family:'Segoe Script','Comic Sans MS','KaiTi',cursive;
+  font-family:'LongCang','Segoe Script','Comic Sans MS','KaiTi',cursive;
   font-size:18px; color:var(--text-primary);
 }
 
 /* ---------- Markdown 渲染样式（保留手写体风格） ---------- */
-.note-block .md-content { font-family:'Segoe Script','Comic Sans MS','KaiTi',cursive; font-size:18px; line-height:32px; color:var(--text-primary); }
+.note-block .md-content { font-family:'LongCang','Segoe Script','Comic Sans MS','KaiTi',cursive; font-size:18px; line-height:32px; color:var(--text-primary); }
 .note-block .md-content h1,
 .note-block .md-content h2,
 .note-block .md-content h3,
 .note-block .md-content h4,
 .note-block .md-content h5,
-.note-block .md-content h6 { font-family:'Segoe Script','Comic Sans MS','KaiTi',cursive; color:var(--accent); font-weight:700; margin:8px 0 4px; line-height:32px; }
+.note-block .md-content h6 { font-family:'LongCang','Segoe Script','Comic Sans MS','KaiTi',cursive; color:var(--accent); font-weight:700; margin:8px 0 4px; line-height:32px; }
 .note-block .md-content h1 { font-size:26px; }
 .note-block .md-content h2 { font-size:23px; }
 .note-block .md-content h3 { font-size:21px; }
@@ -1670,7 +1684,7 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
 /* Markdown 表格 — 保留手写体但使用更紧凑的排版 */
 .note-block .md-content table {
   border-collapse:collapse; width:100%; margin:4px 0;
-  font-family:'Segoe Script','Comic Sans MS','KaiTi',cursive; font-size:17px;
+  font-family:'LongCang','Segoe Script','Comic Sans MS','KaiTi',cursive; font-size:17px;
 }
 .note-block .md-content th {
   border:1px solid var(--border-color); padding:4px 10px;
@@ -2000,7 +2014,7 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
   background: rgba(255,253,246,0.85);
   border: none;
   border-radius: 8px; padding: 8px 10px;
-  font-family: 'KaiTi','STKaiti','Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif;
+  font-family: 'LXGW WenKai','KaiTi','STKaiti','Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif;
   font-size: 13px; color: #3a3a3a; line-height: 1.6;
   box-shadow: 2px 3px 8px rgba(0,0,0,0.10), 0px 1px 2px rgba(0,0,0,0.05);
   pointer-events: none; cursor: default;
@@ -2098,7 +2112,7 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
     ),
     linear-gradient(160deg, #faf3e3 0%, #f5ead6 40%, #fcf7ee 100%);
   color: #3e2c1c;  /* 深褐墨水色 */
-  font-family: 'KaiTi','STKaiti','Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif;
+  font-family: 'LXGW WenKai','KaiTi','STKaiti','Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif;
   font-size: 14px;
   line-height: 1.7;
   letter-spacing: 0.02em;
@@ -2643,7 +2657,7 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
 }
 .md-preview {
   padding: 12px 16px;
-  font-family: 'Segoe Script', 'Comic Sans MS', 'KaiTi', cursive;
+  font-family: 'LongCang', 'Segoe Script', 'Comic Sans MS', 'KaiTi', cursive;
   font-size: 18px;
   line-height: 32px;
   color: var(--text-primary);
@@ -3804,7 +3818,7 @@ body.note-fullpage .notebook-toolbar .tb-group.tb-group-end #btnFullPageNote {
    ============================================================ */
 .rm-modal-content { width: min(1180px, 94vw); height: min(760px, 86vh); max-width: none; max-height: none; display: flex; flex-direction: column; padding: 18px 20px 14px; }
 .rm-modal-header { display: flex; align-items: center; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); margin-bottom: 12px; }
-.rm-modal-header h3 { font-family: 'KaiTi','STKaiti','SimSun',serif; font-size: 20px; color: var(--accent-deep); letter-spacing: 1px; margin: 0; }
+.rm-modal-header h3 { font-family: 'LXGW WenKai','KaiTi','STKaiti','SimSun',serif; font-size: 20px; color: var(--accent-deep); letter-spacing: 1px; margin: 0; }
 .rm-modal-book { margin-left: auto; font-size: 12px; color: var(--text-secondary); background: #fff8e7; padding: 5px 10px; border-radius: 14px; border: 1px solid #ecd7a8; }
 
 .rm-main { flex: 1; display: grid; grid-template-columns: 340px 1fr; gap: 14px; min-height: 0; }

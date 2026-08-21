@@ -1000,6 +1000,7 @@ const AppShell = (function() {
         return FileManager.getBookBlob(bookId).then(function(blobRec) {
           if (!blobRec) throw new Error('教材数据丢失');
           currentBookId = bookId;
+          if (typeof window !== 'undefined') window.__curBookId = bookId;
           // 同步附件管理器当前教材
           if (typeof AttachmentManager !== 'undefined' && AttachmentManager.setCurrentBook) {
             AttachmentManager.setCurrentBook(bookId, meta.name);
@@ -1319,6 +1320,33 @@ const AppShell = (function() {
       if (typeof FileManager !== 'undefined') FileManager.render();
     });
 
+    // 安卓端触摸兜底：部分 WebView 不触发 click，用 touchstart 兜底
+    var _tabBtns = [
+      { id: 'btnViewRead', view: 'read' },
+      { id: 'btnViewNote', view: 'note' },
+      { id: 'btnViewMessage', view: 'message' },
+      { id: 'btnViewAttach', view: 'attach' },
+      { id: 'btnViewSplit', view: 'split' },
+      { id: 'btnViewShelf', view: 'shelf' }
+    ];
+    _tabBtns.forEach(function(item) {
+      var btn = document.getElementById(item.id);
+      if (!btn) return;
+      var _touchFired = false;
+      btn.addEventListener('touchstart', function(e) {
+        _touchFired = true;
+        _switchView(item.view);
+        if (item.view === 'shelf' && typeof FileManager !== 'undefined') FileManager.render();
+        e.preventDefault();
+      }, { passive: false });
+      // 如果 touchstart 已触发，阻止后续的 click 重复执行
+      btn.addEventListener('click', function(e) {
+        if (_touchFired) { _touchFired = false; e.preventDefault(); return; }
+        _switchView(item.view);
+        if (item.view === 'shelf' && typeof FileManager !== 'undefined') FileManager.render();
+      });
+    });
+
     // 寄语视图：冷色粒子网络背景动画（仅视图可见时绘制，切走自动暂停）
     _initMessageParticles();
 
@@ -1373,6 +1401,7 @@ const AppShell = (function() {
             var blobRec = await FileManager.getBookBlob(savedPdf.bookId);
             if (blobRec) {
               currentBookId = savedPdf.bookId;
+              if (typeof window !== 'undefined') window.__curBookId = savedPdf.bookId;
               await PDFReader.loadPdfFromBuffer(blobRec.data, meta.name, savedPdf.bookId);
               if (savedPdf.pageProgress && savedPdf.pageProgress > 1) {
                 PDFReader.jumpToPage(savedPdf.pageProgress);
@@ -1388,6 +1417,7 @@ const AppShell = (function() {
           }
           // 书架书籍缺失时，若仍有持久化 Blob（工具栏"打开"路径），则直接恢复
           if (savedPdf.blob) {
+            if (typeof window !== 'undefined') window.__curBookId = savedPdf.bookId || 'standalone';
             await PDFReader.loadPdfFromStorage('current');
             // 先同步 NFM 当前教材，再加载笔记本
             if (typeof NoteFileManager !== 'undefined' && typeof NoteFileManager.setCurrentBook === 'function') {

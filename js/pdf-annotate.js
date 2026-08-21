@@ -37,6 +37,12 @@ const PDFAnnotate = (function() {
   var _persistTimer = null;
   var _editHandlersBound = false;
   var _lastCanvasW = 0, _lastCanvasH = 0, _lastOffsetX = 0, _lastOffsetY = 0;  // 缓存最近一次 PDF 渲染的画布参数（内部 renderPage 调用时复用）
+  // 快捷键工具映射：数字键 1-7 按住时临时切换工具，松开恢复
+  var _heldToolKey = null;       // 当前按住的数字键对应的工具
+  var _prevEditTool = null;      // 按数字键前的原工具（松开时恢复）
+  var KEY_TOOL_MAP = { '1': 'highlight', '2': 'underline', '3': 'rect', '4': 'pen', '5': 'card', '6': 'select', '7': 'text-select' };
+  // ALT+字母 → 颜色快捷改色
+  var ALT_COLOR_MAP = { 'r': '#ff6b6b', 'b': '#2196f3', 'g': '#4caf50', 'y': '#f5a623', 'p': '#9c27b0', 'o': '#ff7043' };
   var _underlineConfig = { color: '#FFD700', style: 'solid', width: 3, applyAll: false };
   var _highlightConfig = { color: '#ff6b6b', opacity: 40, applyAll: false };
   var _rectConfig = { fillColor: '#ff6b6b', fillOpacity: 30, strokeColor: '#e74c3c', strokeWidth: 2, strokeStyle: 'solid', applyAll: false };
@@ -879,11 +885,64 @@ const PDFAnnotate = (function() {
       document.addEventListener('mousedown', _onDocumentDown);
     }
 
-    // 全局快捷键（仅编辑模式下拦截）
+    // 全局快捷键
     document.addEventListener('keydown', function(ev) {
-      if (!editTool) return; // 查看态不拦截
       var ae = document.activeElement;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+
+      // ALT+字母：快捷改色（对选中的标注生效，不需要进入编辑模式）
+      if (ev.altKey && !ev.ctrlKey && !ev.metaKey) {
+        var colorKey = ALT_COLOR_MAP[(ev.key || '').toLowerCase()];
+        if (colorKey && selectedIds.size > 0) {
+          ev.preventDefault();
+          selectedIds.forEach(function(sid) {
+            var el = _findEl(currentPage, sid);
+            if (!el) return;
+            if (el.tool === 'rect') {
+              el.strokeColor = colorKey; // 框默认改外框颜色
+            } else {
+              el.color = colorKey;
+            }
+          });
+          renderPage(currentPage);
+          _persistNow();
+          return;
+        }
+      }
+
+      // 数字键 1-7：按住临时切换工具（松开恢复）
+      if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && KEY_TOOL_MAP[ev.key]) {
+        if (!_heldToolKey) {
+          var tool = KEY_TOOL_MAP[ev.key];
+          if (tool === 'text-select') {
+            // 文本选择模式：SVG 不拦截，PDF 文本层可自由划选
+            textSelectMode = true;
+            editTool = null;
+            _applyPointerEvents();
+            renderPage(currentPage);
+            _heldToolKey = 'text-select';
+          } else if (tool === 'select') {
+            _prevEditTool = editTool;
+            editTool = 'select';
+            _heldToolKey = 'select';
+            _applyPointerEvents();
+            renderPage(currentPage);
+          } else {
+            _prevEditTool = editTool;
+            editTool = tool;
+            _heldToolKey = tool;
+            if (textSelectMode) { textSelectMode = false; var sBtn = document.getElementById('btnHlSelect'); if (sBtn) sBtn.classList.remove('active'); }
+            _clearSelection();
+            _applyPointerEvents();
+            renderPage(currentPage);
+          }
+        }
+        ev.preventDefault();
+        return;
+      }
+
+      // 以下快捷键仅在编辑模式下生效
+      if (!editTool) return; // 查看态不拦截
 
       // Ctrl+A 全选
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'a') {
@@ -943,9 +1002,25 @@ const PDFAnnotate = (function() {
         }
       }
     });
-  }
 
-  // v129: document 级 mousedown — 捕获 PDF 区域外的卡片点击（卡片拖出 SVG 边界后仍可选中/拖动）
+    // keyup：松开数字键时恢复原工具
+    document.addEventListener('keyup', function(ev) {
+      if (KEY_TOOL_MAP[ev.key] && _heldToolKey) {
+        if (_heldToolKey === 'text-select') {
+          textSelectMode = false;
+          _applyPointerEvents();
+          var sBtn2 = document.getElementById('btnHlSelect');
+          if (sBtn2) sBtn2.classList.remove('active');
+        } else {
+          editTool = _prevEditTool || null;
+          _applyPointerEvents();
+          renderPage(currentPage);
+        }
+        _heldToolKey = null;
+        _prevEditTool = null;
+      }
+    });
+  }
   function _onDocumentDown(e) {
     if (!editTool) return;
     if (_drag) return; // SVG handler 已处理
@@ -1033,6 +1108,29 @@ const PDFAnnotate = (function() {
       return;
     }
     var lp = _localPoint(e);
+    // 确定当前生效的创建工具（数字键临时工具优先）
+    var activeCreateTool = null;
+    if (_heldToolKey && drawingTools[_heldToolKey]) activeCreateTool = _heldToolKey;
+    else if (editTool && drawingTools[editTool]) activeCreateTool = editTool;
+
+    // 创建工具模式下：跳过 hitTest，直接进入创建流程，避免误选已有标注
+    if (activeCreateTool) {
+      _clearSelection();
+      if (activeCreateTool === 'card') {
+        _createCardAt(lp.x, lp.y);
+        e.preventDefault();
+        return;
+      }
+      if (activeCreateTool === 'pen') {
+        _drag = { mode: 'create-pen', elId: null, points: [lp], startLayer: lp };
+      } else { // highlight / underline / rect
+        _drag = { mode: 'create', elId: null, startLayer: lp, origStart: lp };
+      }
+      if (!_windowMoveHandler) { _windowMoveHandler = function(ev) { _onPointerMove(ev); }; window.addEventListener('mousemove', _windowMoveHandler); }
+      e.preventDefault();
+      return;
+    }
+
     var hitId = hitTest(lp.x, lp.y);
     if (hitId) {
       // Ctrl/Cmd+点击：toggle 选择

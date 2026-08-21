@@ -268,12 +268,22 @@ const AIEngine = (function() {
           var _nb = Notebook.getNotebook();
           if (_nb && (_nb.pdfId || _nb.bookId)) refBookId = _nb.pdfId || _nb.bookId;
         }
+        if (!refBookId && typeof ReferenceManager.resolveBookId === 'function') {
+          refBookId = ReferenceManager.resolveBookId();
+        }
         if (refBookId) {
           var refMd = await ReferenceManager.getByBook(refBookId);
           if (refMd && String(refMd).trim()) {
             var rFull = String(refMd);
             var rTrunc = rFull.length > 12000 ? rFull.substring(0, 12000) + '\n...(参考材料内容过长，已截断)' : rFull;
             parts.push('关联参考材料（Layer 3）：\n' + rTrunc);
+          }
+        } else if (typeof ReferenceManager.getAll === 'function') {
+          // 无法定位当前教材时，兜底列出参考空间全部材料，避免 AI 误报"没有材料"
+          var allRefs = await ReferenceManager.getAll();
+          if (allRefs && allRefs.length) {
+            var refNames = allRefs.map(function (m) { return (m && (m.name || m.title)) || (m && m.id) || '未命名'; });
+            parts.push('参考空间存在 ' + refNames.length + ' 份参考材料（当前未能定位所属教材）：' + refNames.join('、') + '。请据此如实回答，不要声称"没有参考资料"。');
           }
         }
       } catch (e) { /* 参考材料检索失败不影响主流程 */ }
